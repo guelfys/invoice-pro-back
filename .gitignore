@@ -1,0 +1,29 @@
+Autorización A y B con item/source/MiCertificado.cert
+Autorización A y B con item/source/MiClavePrivada.key
+Autorización A, B y C sin item/source/MiCertificado.cert
+Autorización A, B y C sin item/source/MiClavePrivada.key
+log
+facturas
+Autorización A y B con item/source
+Autorización A, B y C sin item/source
+autorizar/__pycache__
+__pycache__
+backend/__pycache__
+categorias/__pycache__
+facturasOuput/__pycache__
+fev1/__pycache__
+Factura A
+Factura B
+Factura C
+output
+tes.txt
+input/Ejemplos Input/Backup prueba.xlsx
+configuraciones/Config.xlsx
+configuraciones/UltimoTokenWSMTXCA.txt
+backend_api/.venv
+backend_api/app/__pycache__
+backend_api/jobs
+backend_api/readme.md
+.venv_invoicer
+configuraciones/UltimoTokenWSFEV1.txt
+Usuarios
