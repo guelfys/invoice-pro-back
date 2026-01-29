@@ -1,10 +1,9 @@
-# backend_api/excel_config.py
+# app/excel_config.py
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import openpyxl
-
 
 SHEET_BY_TIPO = {"A": "FacturaA", "B": "FacturaB", "C": "FacturaC"}
 
@@ -62,7 +61,6 @@ def _si_no_to_bool(v: Any) -> bool:
 
 
 class _LockFile:
-    """Lock por archivo .lock usando creación exclusiva (simple y suficiente para demo)."""
 
     def __init__(self, lock_path: str, timeout_sec: float = 10.0):
         self.lock_path = lock_path
@@ -98,7 +96,6 @@ def _open_wb(excel_path: str):
 
 
 def _header_map(ws) -> Dict[str, int]:
-    """Devuelve mapa header->col_index (1-based) según fila 1."""
     m: Dict[str, int] = {}
     for col_idx, cell in enumerate(ws[1], start=1):
         if cell.value is None:
@@ -107,6 +104,14 @@ def _header_map(ws) -> Dict[str, int]:
         if key:
             m[key] = col_idx
     return m
+
+
+def _ensure_headers(ws, hmap: Dict[str, int]):
+    for h in EXCEL_HEADERS:
+        if h not in hmap:
+            new_col = ws.max_column + 1
+            ws.cell(row=1, column=new_col).value = h
+            hmap[h] = new_col
 
 
 def _find_row_by_cuit(ws, col_cuit: int, cuit: int) -> Optional[int]:
@@ -141,7 +146,7 @@ def list_cuits(excel_path: str) -> List[Dict[str, Any]]:
         wb = _open_wb(excel_path)
 
         seen = {}
-        for tipo, sheet in SHEET_BY_TIPO.items():
+        for _, sheet in SHEET_BY_TIPO.items():
             if sheet not in wb.sheetnames:
                 continue
             ws = wb[sheet]
@@ -155,7 +160,6 @@ def list_cuits(excel_path: str) -> List[Dict[str, Any]]:
                 if not c:
                     continue
                 if c not in seen:
-                    # razón social si existe
                     rs = ""
                     col_rs = hmap.get("Razón Social")
                     if col_rs:
@@ -175,6 +179,7 @@ def get_config_by_cuit(excel_path: str, tipo: str, cuit: int) -> Dict[str, Any]:
         wb = _open_wb(excel_path)
         ws = wb[SHEET_BY_TIPO[tipo]]
         hmap = _header_map(ws)
+        _ensure_headers(ws, hmap)
 
         col_cuit = hmap["Cuit"]
         row = _find_row_by_cuit(ws, col_cuit, cuit)
@@ -184,9 +189,6 @@ def get_config_by_cuit(excel_path: str, tipo: str, cuit: int) -> Dict[str, Any]:
 
 
 def upsert_config_by_cuit(excel_path: str, tipo: str, cuit: int, data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Actualiza una fila existente por CUIT. Si no existe, la crea (append).
-    """
     tipo = tipo.upper()
     if tipo not in SHEET_BY_TIPO:
         raise ValueError("tipo debe ser A, B o C")
@@ -196,12 +198,7 @@ def upsert_config_by_cuit(excel_path: str, tipo: str, cuit: int, data: Dict[str,
         wb = _open_wb(excel_path)
         ws = wb[SHEET_BY_TIPO[tipo]]
         hmap = _header_map(ws)
-
-        for h in EXCEL_HEADERS:
-            if h not in hmap:
-                new_col = ws.max_column + 1
-                ws.cell(row=1, column=new_col).value = h
-                hmap[h] = new_col
+        _ensure_headers(ws, hmap)
 
         col_cuit = hmap["Cuit"]
         row = _find_row_by_cuit(ws, col_cuit, cuit)
@@ -226,5 +223,42 @@ def upsert_config_by_cuit(excel_path: str, tipo: str, cuit: int, data: Dict[str,
                 ws.cell(row=row, column=col).value = "" if val is None else str(val)
 
         wb.save(excel_path)
-
         return _row_to_api(ws, row, hmap)
+
+
+def sync_row2_all_tipos(
+    excel_path: str,
+    *,
+    cuit: int,
+    razon_social: str = "",
+    domicilio_comercial: str = "",
+    condicion_iva: str = "",
+    punto_venta: int,
+    numero_actividad: int,
+) -> Dict[str, Any]:
+    
+    lock_path = excel_path + ".lock"
+    with _LockFile(lock_path):
+        wb = _open_wb(excel_path)
+
+        changed: Dict[str, Any] = {}
+        for tipo, sheet in SHEET_BY_TIPO.items():
+            if sheet not in wb.sheetnames:
+                continue
+            ws = wb[sheet]
+            hmap = _header_map(ws)
+            _ensure_headers(ws, hmap)
+
+            r = 2  # <- tu requisito
+            ws.cell(row=r, column=hmap["Cuit"]).value = int(cuit)
+            ws.cell(row=r, column=hmap["Punto Venta"]).value = int(punto_venta)
+            ws.cell(row=r, column=hmap["Numero Actividad"]).value = int(numero_actividad)
+
+            ws.cell(row=r, column=hmap["Razón Social"]).value = razon_social or ""
+            ws.cell(row=r, column=hmap["Domicilio Comercial"]).value = domicilio_comercial or ""
+            ws.cell(row=r, column=hmap["Condición IVA"]).value = condicion_iva or ""
+
+            changed[tipo] = {"sheet": sheet, "row": r}
+
+        wb.save(excel_path)
+        return {"excel_path": excel_path, "changed": changed}

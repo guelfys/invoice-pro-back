@@ -4,6 +4,9 @@ import re
 import shutil
 import json
 from datetime import datetime
+from pydantic import BaseModel
+from .excel_config import sync_row2_all_tipos
+from zeep.helpers import serialize_object
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -13,14 +16,9 @@ from zeep import Client
 from zeep.transports import Transport
 import requests
 
-# --- WSDL de Padrón A5 (personaServiceA5) ---
 PADRON_A5_WSDL = "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5?wsdl"  # :contentReference[oaicite:4]{index=4}
 
 def get_cert_key_paths_for_env(cuit: str, env: str) -> tuple[Path, Path]:
-    """
-    Devuelve (cert_path, key_path) según env, apuntando a la carpeta source del usuario.
-    Tomamos FEV1 source como "canónica" (igual escribimos en ambos).
-    """
     fev1_source = USUARIOS_DIR / cuit / SERVICES["FEV1"]["auth_dir"] / "source"
 
     cert_name = ENV_FILES[env]["cert_name"]
@@ -38,32 +36,270 @@ def get_cert_key_paths_for_env(cuit: str, env: str) -> tuple[Path, Path]:
 
 
 def obtener_token_sign_con_wsaa_cliente(env: str, servicio: str, cert_path: Path, key_path: Path) -> tuple[str, str]:
-    """
-    ESTA FUNCIÓN LA CONECTAMOS A TU wsaa-cliente.
+    env = norm_env(env)
 
-    Como vos ya tenés wsaa-cliente dentro de sources/<env>/<servicio>/,
-    lo ideal es invocar el script que genere el loginTicketResponse y parsearlo.
+    svc = (servicio or "").strip().lower()
+    if svc in ("padron", "padron_a5", "a5"):
+        service_id = "ws_sr_padron_a5"
+    elif svc in ("constancia", "constancia_inscripcion", "constancia-inscripcion"):
+        service_id = "ws_sr_constancia_inscripcion"
+    else:
+        service_id = (servicio or "").strip()
 
-    - servicio para padrón/constancia: normalmente 'ws_sr_padron_a5' o 'ws_sr_ws_constancia_inscripcion'
-      (según cuál uses/habilites).
-    - Devuelve (token, sign).
-    """
+    wsaa_wsdl = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms?WSDL" if env == "demo" else "https://wsaa.afip.gov.ar/ws/services/LoginCms?WSDL"
 
-    raise HTTPException(status_code=501, detail="Falta conectar wsaa-cliente para obtener token/sign (WSAA).")
+    ps1_candidates = [
+        cert_path.parent / "wsaa-cliente.ps1",
+        cert_path.parent / "wsaa_cliente.ps1",
+        BASE_DIR / "wsaa-cliente.ps1",
+        BASE_DIR / "wsaa_cliente.ps1",
+    ]
+    ps1_path = next((p for p in ps1_candidates if p.exists()), None)
+    if not ps1_path:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "No se encontró wsaa-cliente.ps1. "
+                f"Busqué en: {', '.join(str(p) for p in ps1_candidates)}"
+            ),
+        )
 
+    run_dir = cert_path.parent / "_wsaa_tmp"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(ps1_path),
+        "-Certificado",
+        str(cert_path),
+        "-ClavePrivada",
+        str(key_path),
+        "-ServicioId",
+        service_id,
+        "-WsaaWsdl",
+        wsaa_wsdl,
+    ]
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            cwd=str(run_dir),
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="No se pudo ejecutar PowerShell (no encontrado).")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Timeout ejecutando wsaa-cliente.ps1.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error ejecutando wsaa-cliente.ps1: {e}")
+
+    ok_files = sorted(run_dir.glob("*-loginTicketResponse.xml"), key=lambda p: p.stat().st_mtime, reverse=True)
+    err_files = sorted(run_dir.glob("*-loginTicketResponse-ERROR.xml"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    if not ok_files:
+        if err_files:
+            err_msg = err_files[0].read_text(encoding="utf-8", errors="ignore").strip()
+        else:
+            err_msg = ((completed.stdout or "") + "" + (completed.stderr or "")).strip()
+            err_msg = err_msg or "No se generó loginTicketResponse.xml (sin detalle)."
+
+        raise HTTPException(status_code=502, detail=f"WSAA ERROR: {err_msg}")
+
+    ltr_path = ok_files[0]
+
+    try:
+        xml_text = ltr_path.read_text(encoding="utf-8", errors="ignore")
+        root = ET.fromstring(xml_text)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"WSAA devolvió XML inválido: {e}")
+
+    def _find_tag_text(tag_name: str):
+        for el in root.iter():
+            t = el.tag.split("}")[-1] if isinstance(el.tag, str) else el.tag
+            if t == tag_name:
+                return (el.text or "").strip()
+        return None
+
+    token = _find_tag_text("token")
+    sign = _find_tag_text("sign")
+
+    if not token or not sign:
+        snippet = xml_text[:500].replace("", " ")
+        raise HTTPException(status_code=502, detail=f"No se encontraron token/sign en loginTicketResponse.xml. Snippet: {snippet}")
+
+    return token, sign
 
 def call_padron_a5_get_persona(token: str, sign: str, cuit: str) -> dict:
-    """
-    Llama a getPersona_v2 (Padrón A5 / Constancia).
-    Estructura de request token/sign/cuitRepresentada/idPersona está documentada. :contentReference[oaicite:5]{index=5}
-    """
     session = requests.Session()
     transport = Transport(session=session, timeout=30)
     client = Client(PADRON_A5_WSDL, transport=transport)
 
     resp = client.service.getPersona_v2(token, sign, int(cuit), int(cuit))
 
-    return resp
+    return serialize_object(resp)
+
+from typing import Any, Dict, List, Tuple, Optional
+
+def _get(o: Any, key: str, default=None):
+    if o is None:
+        return default
+    if isinstance(o, dict):
+        return o.get(key, default)
+    return getattr(o, key, default)
+
+def _s(x: Any) -> str:
+    if x is None:
+        return ""
+    return str(x).strip()
+
+def _build_domicilio(domicilio_fiscal: Any) -> str:
+    if not domicilio_fiscal:
+        return ""
+    direccion = _s(_get(domicilio_fiscal, "direccion"))
+    localidad = _s(_get(domicilio_fiscal, "localidad"))
+    prov = _s(_get(domicilio_fiscal, "descripcionProvincia"))
+    cp = _s(_get(domicilio_fiscal, "codPostal"))
+
+    parts = [p for p in [direccion, localidad, prov] if p]
+    if cp:
+        parts.append(f"CP {cp}")
+    return " - ".join(parts)
+
+def _detect_condicion_iva(padron: dict) -> str:
+
+    dm = _get(padron, "datosMonotributo", {}) or {}
+    dr = _get(padron, "datosRegimenGeneral", {}) or {}
+
+    impuestos = []
+    imp_dm = _get(dm, "impuesto", []) or []
+    imp_dr = _get(dr, "impuesto", []) or []
+    if isinstance(imp_dm, list):
+        impuestos += imp_dm
+    if isinstance(imp_dr, list):
+        impuestos += imp_dr
+
+    def imp_desc(i): return _s(_get(i, "descripcionImpuesto")).upper()
+    def imp_estado(i): return _s(_get(i, "estadoImpuesto")).upper()
+
+    if any(("MONOTRIBUTO" in imp_desc(i)) and (imp_estado(i).startswith("AC")) for i in impuestos):
+        return "Monotributista"
+
+    if any(("IVA" in imp_desc(i)) and (imp_estado(i).startswith("AC")) for i in impuestos):
+        return "Responsable Inscripto"
+
+    return ""  
+
+def _extract_actividades(padron: dict) -> Tuple[List[dict], List[int]]:
+
+    acts: List[dict] = []
+
+    for origen_key in ("datosRegimenGeneral", "datosMonotributo"):
+        sec = _get(padron, origen_key, {}) or {}
+        arr = _get(sec, "actividad", []) or []
+        if not isinstance(arr, list):
+            continue
+
+        for a in arr:
+            id_act = _get(a, "idActividad", None)
+            if id_act is None:
+                continue
+            try:
+                id_int = int(id_act)
+            except:
+                continue
+
+            acts.append({
+                "id": id_int,
+                "descripcion": _s(_get(a, "descripcionActividad")),
+                "origen": origen_key,
+                "orden": int(_get(a, "orden", 9999) or 9999),
+                "periodo": _get(a, "periodo", None),
+                "nomenclador": _get(a, "nomenclador", None),
+            })
+
+    by_id: Dict[int, dict] = {}
+    for a in sorted(acts, key=lambda x: (x["orden"], x["id"])):
+        if a["id"] not in by_id:
+            by_id[a["id"]] = a
+        else:
+            if not by_id[a["id"]].get("descripcion") and a.get("descripcion"):
+                by_id[a["id"]] = a
+
+    out = list(by_id.values())
+    out.sort(key=lambda x: (x["orden"], x["id"]))
+
+    ids = [x["id"] for x in out]
+
+    if 0 not in ids:
+        out.insert(0, {
+            "id": 0,
+            "descripcion": "(Sin informar) 0",
+            "origen": "system",
+            "orden": 0,
+            "periodo": None,
+            "nomenclador": None,
+        })
+        ids.insert(0, 0)
+
+    if not ids:
+        out = [{
+            "id": 0,
+            "descripcion": "(Sin informar) 0",
+            "origen": "system",
+            "orden": 0,
+            "periodo": None,
+            "nomenclador": None,
+        }]
+        ids = [0]
+
+    return out, ids
+
+def map_padron_to_cache_fields(padron: dict) -> Tuple[dict, List[str]]:
+    warnings: List[str] = []
+
+    dg = _get(padron, "datosGenerales", {}) or {}
+
+    tipo_persona = _s(_get(dg, "tipoPersona")).upper()
+    razon = _s(_get(dg, "razonSocial"))
+    apellido = _s(_get(dg, "apellido"))
+    nombre = _s(_get(dg, "nombre"))
+
+    razon_social = razon
+    if not razon_social:
+        if tipo_persona == "FISICA":
+            razon_social = " ".join([p for p in [apellido, nombre] if p]).strip()
+            if razon_social:
+                warnings.append("ARCA no informó 'razonSocial'; se armó con apellido + nombre.")
+        else:
+            warnings.append("ARCA devolvió 'razonSocial' vacío/None para persona no física. Completar manualmente si aplica.")
+
+    domicilio_fiscal = _get(dg, "domicilioFiscal", {}) or {}
+    domicilio = _build_domicilio(domicilio_fiscal)
+
+    if not domicilio:
+        warnings.append("ARCA no devolvió domicilioFiscal (o vino incompleto).")
+
+    condicion_iva = _detect_condicion_iva(padron)
+    if not condicion_iva:
+        warnings.append("No se pudo inferir condición IVA desde impuestos. Puede requerir otro endpoint o reglas adicionales.")
+
+    actividades_detalle, actividades_ids = _extract_actividades(padron)
+
+    mapped = {
+        "razon_social": razon_social,
+        "domicilio_comercial": domicilio,
+        "condicion_iva": condicion_iva,
+        "actividades_detalle": actividades_detalle,
+        "actividades": actividades_ids,
+    }
+    return mapped, warnings
 
 
 @router.post("/cuits/{cuit}/arca/refresh")
@@ -71,7 +307,6 @@ def refresh_arca(cuit: str):
     cuit = norm_cuit(cuit)
     db = load_cuits_db()
 
-    # buscar env en db
     cuit_item = None
     for it in db.get("cuits", []):
         if str(it.get("cuit")) == cuit:
@@ -82,44 +317,63 @@ def refresh_arca(cuit: str):
 
     env = norm_env(cuit_item.get("environment", "demo"))
 
-    # 1) ubicar cert/key
     cert_path, key_path = get_cert_key_paths_for_env(cuit, env)
 
-    # 2) obtener token/sign WSAA para Padrón/Constancia
-    #    (acá lo conectamos a tu wsaa-cliente)
-    token, sign = obtener_token_sign_con_wsaa_cliente(env, "padron", cert_path, key_path)
+    token, sign = obtener_token_sign_con_wsaa_cliente(
+        env,
+        "ws_sr_constancia_inscripcion",
+        cert_path,
+        key_path
+    )
 
-    # 3) llamar padrón
     try:
         padron = call_padron_a5_get_persona(token, sign, cuit)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error consultando Padrón/Constancia: {e}")
 
     cuit_item["padron_raw"] = str(padron)
+    try:
+        cuit_item["padron_json"] = json.dumps(padron, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+
+        cuit_item["padron_json"] = None
+
+    mapped, warnings = map_padron_to_cache_fields(padron)
+    for k, v in mapped.items():
+        cuit_item[k] = v
+
+    if warnings:
+        cuit_item.setdefault("arca_warnings", [])
+
+        for w in warnings:
+            if w not in cuit_item["arca_warnings"]:
+                cuit_item["arca_warnings"].append(w)
+
+    try:
+        sel_act = int(cuit_item.get("selected_numero_actividad") or 0)
+    except:
+        sel_act = 0
+    if sel_act not in (cuit_item.get("actividades") or [0]):
+        cuit_item["selected_numero_actividad"] = 0
+
     cuit_item["last_refresh"] = datetime.now().isoformat(timespec="seconds")
-
     save_cuits_db(db)
-    return {"ok": True, "cuit": int(cuit), "last_refresh": cuit_item["last_refresh"]}
 
-# =========================
-# Paths base (portable)
-# =========================
+    return {
+        "ok": True,
+        "cuit": int(cuit),
+        "last_refresh": cuit_item["last_refresh"],
+        "mapped": mapped,
+        "warnings": cuit_item.get("arca_warnings", []),
+    }
+
 def get_base_dir() -> Path:
-    """
-    Devuelve la carpeta base donde viven:
-    - Usuarios/
-    - sources/
-    - Configuraciones/
-    base_dir = parents[2]
-    """
     p = Path(__file__).resolve()
 
-    # Búsqueda robusta hacia arriba
     for parent in [p.parent, *p.parents]:
         if (parent / "Usuarios").exists() or (parent / "sources").exists() or (parent / "Configuraciones").exists():
             return parent
 
-    # Fallback para tu estructura actual (app -> backend_api -> carpeta_con_todo)
     return p.parents[2]
 
 BASE_DIR = get_base_dir()
@@ -127,16 +381,16 @@ USUARIOS_DIR = BASE_DIR / "Usuarios"
 SOURCES_DIR = BASE_DIR / "sources"
 CONFIG_DIR = BASE_DIR / "Configuraciones"
 CUITS_JSON = CONFIG_DIR / "cuits.json"
+CONFIG_XLSX = CONFIG_DIR / "Config.xlsx"
 
-# Carpetas nuevas (sin acentos)
 AUTH_ABC_NEW = "Autorizacion_ABC_sin_item"
 AUTH_AB_NEW  = "Autorizacion_AB_con_item"
 
-# Servicios y rutas sources esperadas
 SERVICES = {
     "FEV1": {"auth_dir": AUTH_ABC_NEW, "sources_subdir": "fev1"},
     "MTXCA": {"auth_dir": AUTH_AB_NEW,  "sources_subdir": "mtxca"},
 }
+
 ENV_FILES = {
     "demo": {
         "cert_name": "MiCertificado.cert",
@@ -201,9 +455,6 @@ def upsert_cuit(db: dict, item: dict):
     db["cuits"] = cuits
 
 def copy_sources_to_user(cuit: str, env: str):
-    """
-    Copia sources/<env>/<fev1|mtxca> a Usuarios/<cuit>/<auth_dir>/source
-    """
     for svc, meta in SERVICES.items():
         src = SOURCES_DIR / env / meta["sources_subdir"]
         if not src.exists():
@@ -216,9 +467,6 @@ def copy_sources_to_user(cuit: str, env: str):
         shutil.copytree(src, dst, dirs_exist_ok=True)
 
 def write_cert_and_key_to_sources(cuit: str, env: str, cert_bytes: bytes, key_bytes: bytes):
-    """
-    Guarda cert + key en AMBOS source (FEV1 y MTXCA) con nombres obligatorios según env.
-    """
     cert_name = ENV_FILES[env]["cert_name"]
     key_names = ENV_FILES[env]["key_names"]
 
@@ -226,19 +474,12 @@ def write_cert_and_key_to_sources(cuit: str, env: str, cert_bytes: bytes, key_by
         dst_source = USUARIOS_DIR / cuit / meta["auth_dir"] / "source"
         dst_source.mkdir(parents=True, exist_ok=True)
 
-        # cert
         (dst_source / cert_name).write_bytes(cert_bytes)
-
-        # key (en prod: guardamos 2 nombres por compat de casing)
         for kn in key_names:
             (dst_source / kn).write_bytes(key_bytes)
 
 def ensure_token_txts(cuit: str):
-    """
-    Crea los TXT de 'ultimo token' para evitar faltantes.
-    (Ajustalo si tus scripts los guardan en otro lugar.)
-    """
-    # Los creo en ambos sources por simplicidad/robustez
+
     for meta in SERVICES.values():
         dst_source = USUARIOS_DIR / cuit / meta["auth_dir"] / "source"
         dst_source.mkdir(parents=True, exist_ok=True)
@@ -264,23 +505,26 @@ def get_cuit_detail(cuit: str):
     db = load_cuits_db()
     for it in db.get("cuits", []):
         if str(it.get("cuit")) == cuit:
-            return it
+            out = dict(it)
+            out.setdefault("selected_punto_venta", 0)
+            out.setdefault("selected_numero_actividad", 0)
+            return out
     raise HTTPException(status_code=404, detail="CUIT no encontrado.")
 
 
 @router.post("/cuits")
 async def add_cuit(
     cuit: str = Form(...),
-    environment: str = Form("prod"), 
+    environment: str = Form(...),
     cert: UploadFile = File(...),
     key: UploadFile = File(...),
 ):
     cuit = norm_cuit(cuit)
-    env = norm_env(environment) 
+    env = norm_env(environment)
+
     cert_bytes = await cert.read()
     key_bytes = await key.read()
 
-    # Validación "funcional mínima" (lo que pediste)
     cert_text = cert_bytes.decode("utf-8", errors="ignore")
     key_text = key_bytes.decode("utf-8", errors="ignore")
     validate_pem_cert(cert_text)
@@ -288,16 +532,12 @@ async def add_cuit(
 
     ensure_dirs()
 
-    # 1) Copiar WSAA / sources a la carpeta del usuario
     copy_sources_to_user(cuit, env)
 
-    # 2) Escribir cert y key con nombres obligatorios según env
     write_cert_and_key_to_sources(cuit, env, cert_bytes, key_bytes)
 
-    # 3) Asegurar txts token (robusto)
     ensure_token_txts(cuit)
 
-    # 4) Persistir en "DB" (json)
     db = load_cuits_db()
     upsert_cuit(db, {
         "cuit": cuit,
@@ -307,6 +547,8 @@ async def add_cuit(
         "condicion_iva": "",
         "puntos_venta": [],
         "actividades": [],
+        "selected_punto_venta": 0,
+        "selected_numero_actividad": 0,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "last_refresh": None,
     })
@@ -321,3 +563,49 @@ async def add_cuit(
             "keys": ENV_FILES[env]["key_names"],
         }
     }
+
+
+class SyncExcelRequest(BaseModel):
+    punto_venta: int
+    numero_actividad: int = 0
+@router.post("/cuits/{cuit}/sync-excel")
+def sync_excel_from_cuit_cache(cuit: str, req: SyncExcelRequest):
+
+    cuit_norm = norm_cuit(cuit)
+
+    db = load_cuits_db()
+    cuit_item = None
+    for it in db.get("cuits", []):
+        if str(it.get("cuit")) == cuit_norm:
+            cuit_item = it
+            break
+    if not cuit_item:
+        raise HTTPException(status_code=404, detail="CUIT no encontrado en cuits.json")
+
+    if not CONFIG_XLSX.exists():
+        raise HTTPException(status_code=500, detail=f"No existe Config.xlsx en: {CONFIG_XLSX}")
+
+    pv = int(req.punto_venta) if req.punto_venta is not None else 0
+    na = int(req.numero_actividad) if req.numero_actividad is not None else 0
+
+    cuit_item["selected_punto_venta"] = pv
+    cuit_item["selected_numero_actividad"] = na
+    cuit_item["last_sync_excel"] = datetime.now().isoformat(timespec="seconds")
+    save_cuits_db(db)
+
+    try:
+        result = sync_row2_all_tipos(
+            str(CONFIG_XLSX),
+            cuit=int(cuit_norm),
+            razon_social=str(cuit_item.get("razon_social") or ""),
+            domicilio_comercial=str(cuit_item.get("domicilio_comercial") or ""),
+            condicion_iva=str(cuit_item.get("condicion_iva") or ""),
+            punto_venta=pv,
+            numero_actividad=na,
+        )
+    except PermissionError:
+        raise HTTPException(status_code=409, detail="No se pudo guardar Config.xlsx (¿está abierto en Excel?). Cerralo y reintentá.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error actualizando Config.xlsx: {e}")
+
+    return {"ok": True, "cuit": int(cuit_norm), "result": result}

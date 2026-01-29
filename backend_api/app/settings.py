@@ -5,17 +5,14 @@ import sys
 class Settings(BaseModel):
     cors_origin: str = os.getenv("CORS_ORIGIN", "http://localhost:5173")
 
-    # raíz del proyecto (2 niveles arriba de backend_api/app)
     project_root: str = os.getenv(
         "INVOICER_PROJECT_ROOT",
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),
     )
 
-    # Scripts a ejecutar según ambiente
     generator_script_demo: str = os.getenv("INVOICER_GENERATOR_SCRIPT_DEMO", "main_invoicerPRO.py")
     generator_script_prod: str = os.getenv("INVOICER_GENERATOR_SCRIPT_PROD", "main_Produccion_invoicerPRO.py")
 
-    # (opcional) compatibilidad si algo viejo lo usa
     generator_script: str = os.getenv("INVOICER_GENERATOR_SCRIPT", "main_invoicerPRO.py")
 
     jobs_dir: str = os.getenv(

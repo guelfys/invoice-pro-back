@@ -7,10 +7,12 @@ from .settings import settings
 from .jobs import create_job, get_job, tail_log
 from .excel_config import list_cuits, get_config_by_cuit, upsert_config_by_cuit
 from .config_cuits import router as config_cuits_router
+from .uploads_facturacion import router as uploads_facturacion_router
 
 app = FastAPI(title="InvoicerPRO API", version="0.1.0")
 
 app.include_router(config_cuits_router)
+app.include_router(uploads_facturacion_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,15 +22,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =========================
-# CONFIG (EXCEL)
-# =========================
-
 class ConfigUpdateRequest(BaseModel):
     data: Dict[str, Any] = {}
 
 @app.get("/api/config/excel/cuits")
-def api_config_cuits_excel():
+def api_config_excel_cuits():
     return {"cuits": list_cuits(settings.config_excel_path)}
 
 @app.get("/api/config/excel/{tipo}/by-cuit/{cuit}")
@@ -47,19 +45,17 @@ def api_put_config_excel(tipo: str, cuit: int, req: ConfigUpdateRequest):
     try:
         updated = upsert_config_by_cuit(settings.config_excel_path, tipo, cuit, req.data)
         return {"tipo": tipo.upper(), "config": updated}
+    except PermissionError:
+        raise HTTPException(status_code=409, detail="No se pudo guardar Config.xlsx (¿está abierto en Excel?). Cerralo y reintentá.")
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# =========================
-# JOBS
-# =========================
-
 class JobCreateRequest(BaseModel):
     mode: str = "local"
     cuit: int
-    environment: str = "prod"  # prod por defecto
+    environment: str = "demo"  # demo | prod
 
 @app.get("/health")
 def health():
@@ -67,10 +63,7 @@ def health():
 
 @app.post("/jobs/generar")
 def jobs_generar(req: JobCreateRequest):
-    env = (req.environment or "prod").lower().strip()
-    if env in ("produccion", "producción"):
-        env = "prod"
-
+    env = (req.environment or "demo").lower().strip()
     script = settings.generator_script_demo if env == "demo" else settings.generator_script_prod
 
     job = create_job(

@@ -1,0 +1,27 @@
+{
+  "cuits": [
+    {
+      "cuit": "20226445944",
+      "environment": "produccion",
+      "razon_social": "Gonzalo Cocina",
+      "domicilio_comercial": "Buenos Aires, Capital Federal",
+      "condicion_iva": "Responsable Inscripto",
+      "puntos_venta": [
+        2,
+        3
+      ],
+      "actividades": [
+        10900,
+        20030,
+        2040,
+        0
+      ],
+      "created_at": "2026-01-28T13:28:18",
+      "last_refresh": "2026-01-29T15:13:48",
+      "selected_punto_venta": 3,
+      "selected_numero_actividad": 0,
+      "last_sync_excel": "2026-01-29T15:13:49",
+      "padron_raw": "{\n    'datosGenerales': {\n        'apellido': 'COCINA',\n        'caracterizacion': [],\n        'dependencia': None,\n        'domicilioFiscal': {\n            'codPostal': '1426',\n            'datoAdicional': None,\n            'descripcionProvincia': 'CIUDAD AUTONOMA BUENOS AIRES',\n            'direccion': 'OLLEROS AV. 3006 Piso:01 Dpto:A',\n            'idProvincia': 0,\n            'localidad': None,\n            'tipoDatoAdicional': None,\n            'tipoDomicilio': 'FISCAL'\n        },\n        'esSucesion': 'NO',\n        'estadoClave': 'ACTIVO',\n        'fechaContratoSocial': None,\n        'fechaFallecimiento': None,\n        'idPersona': 20226445944,\n        'mesCierre': 12,\n        'nombre': 'GONZALO MARTIN',\n        'razonSocial': None,\n        'tipoClave': 'CUIT',\n        'tipoPersona': 'FISICA'\n    },\n    'datosMonotributo': {\n        'actividad': [\n            {\n                'descripcionActividad': 'SERVICIOS DE CONSULTORES EN INFORMÁTICA Y SUMINISTROS DE PROGRAMAS DE INFORMÁTICA',\n                'idActividad': 620100,\n                'nomenclador': 883,\n                'orden': 2,\n                'periodo': 202003\n            },\n            {\n                'descripcionActividad': 'SERVICIOS DE ASESORAMIENTO, DIRECCIÓN Y GESTIÓN EMPRESARIAL REALIZADOS POR INTEGRANTES DE CUERPOS DE DIRECCIÓN EN SOCIEDADES EXCEPTO LAS ANÓNIMAS',\n                'idActividad': 702092,\n                'nomenclador': 883,\n                'orden': 1,\n                'periodo': 201311\n            }\n        ],\n        'actividadMonotributista': {\n            'descripcionActividad': 'SERVICIOS DE ASESORAMIENTO, DIRECCIÓN Y GESTIÓN EMPRESARIAL REALIZADOS POR INTEGRANTES DE CUERPOS DE DIRECCIÓN EN SOCIEDADES EXCEPTO LAS ANÓNIMAS',\n            'idActividad': 702092,\n            'nomenclador': 883,\n            'orden': 1,\n            'periodo': 201311\n        },\n        'categoriaMonotributo': {\n            'descripcionCategoria': 'H LOCACIONES DE SERVICIOS',\n            'idCategoria': 42,\n            'idImpuesto': 20,\n            'periodo': 202602\n        },\n        'componenteDeSociedad': [],\n        'impuesto': [\n            {\n                'descripcionImpuesto': 'MONOTRIBUTO',\n                'estadoImpuesto': 'AC',\n                'idImpuesto': 20,\n                'motivo': 'INSCRIPCIÓN NO TRAMITADA EN AGENCIA',\n                'periodo': 202503\n            }\n        ]\n    },\n    'datosRegimenGeneral': {\n        'actividad': [\n            {\n                'descripcionActividad': 'SERVICIOS DE CONSULTORES EN INFORMÁTICA Y SUMINISTROS DE PROGRAMAS DE INFORMÁTICA',\n                'idActividad': 620100,\n                'nomenclador': 883,\n                'orden': 2,\n                'periodo': 202003\n            },\n            {\n                'descripcionActividad': 'SERVICIOS DE ASESORAMIENTO, DIRECCIÓN Y GESTIÓN EMPRESARIAL REALIZADOS POR INTEGRANTES DE CUERPOS DE DIRECCIÓN EN SOCIEDADES EXCEPTO LAS ANÓNIMAS',\n                'idActividad': 702092,\n                'nomenclador': 883,\n                'orden': 1,\n                'periodo': 201311\n            }\n        ],\n        'categoriaAutonomo': {\n            'descripcionCategoria': 'T1 CAT III INGRESOS HASTA $15.000',\n            'idCategoria': 103,\n            'idImpuesto': 308,\n            'periodo': 201203\n        },\n        'impuesto': [\n            {\n                'descripcionImpuesto': 'GANANCIAS PERSONAS FISICAS',\n                'estadoImpuesto': 'AC',\n                'idImpuesto': 11,\n                'motivo': 'INSCRIPCIÓN NO TRAMITADA EN AGENCIA',\n                'periodo': 201202\n            },\n            {\n                'descripcionImpuesto': 'APORTES SEG.SOCIAL AUTONOMOS',\n                'estadoImpuesto': 'AC',\n                'idImpuesto': 308,\n                'motivo': 'INSCRIPCIÓN NO TRAMITADA EN AGENCIA',\n                'periodo': 201203\n            },\n            {\n                'descripcionImpuesto': 'REG. SIMPLIFICADO IIBB AGIP',\n                'estadoImpuesto': 'NA',\n                'idImpuesto': 5190,\n                'motivo': 'NO ALCANZADO EN TRÁMITE EN LA JURISDICCIÓN',\n                'periodo': 202601\n            },\n            {\n                'descripcionImpuesto': 'CONTRIBUCION MUNICIPAL AGIP',\n                'estadoImpuesto': 'NA',\n                'idImpuesto': 5191,\n                'motivo': 'JURISDICCIÓN NO ADHERIDA',\n                'periodo': 202601\n            }\n        ],\n        'regimen': []\n    },\n    'errorConstancia': None,\n    'errorMonotributo': None,\n    'errorRegimenGeneral': None,\n    'metadata': {\n        'fechaHora': datetime.datetime(2026, 1, 29, 15, 14, 3, 629000, tzinfo=<FixedOffset '-03:00'>),\n        'servidor': 'linux11'\n    }\n}"
+    }
+  ]
+}
