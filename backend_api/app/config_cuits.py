@@ -16,7 +16,47 @@ from zeep import Client
 from zeep.transports import Transport
 import requests
 
+import ssl
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
+
+
 PADRON_A5_WSDL = "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5?wsdl"  # :contentReference[oaicite:4]{index=4}
+
+WSFE_WSDL = {
+    "demo": "https://wswhomo.afip.gov.ar/wsfev1/service.asmx?WSDL",
+    "produccion": "https://servicios1.afip.gov.ar/wsfev1/service.asmx?WSDL",
+}
+
+class AFIPLegacyTLSAdapter(HTTPAdapter):
+    def __init__(self, ssl_context: ssl.SSLContext, **kwargs):
+        self._ssl_context = ssl_context
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs["ssl_context"] = self._ssl_context
+        self.poolmanager = PoolManager(
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            **pool_kwargs
+        )
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        proxy_kwargs["ssl_context"] = self._ssl_context
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
+def make_afip_legacy_session() -> requests.Session:
+
+    ctx = ssl.create_default_context()
+
+    ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+
+    s = requests.Session()
+    s.mount("https://servicios1.afip.gov.ar/", AFIPLegacyTLSAdapter(ctx))
+    s.mount("https://wswhomo.afip.gov.ar/", AFIPLegacyTLSAdapter(ctx))
+    return s
+
 
 def get_cert_key_paths_for_env(cuit: str, env: str) -> tuple[Path, Path]:
     fev1_source = USUARIOS_DIR / cuit / SERVICES["FEV1"]["auth_dir"] / "source"
@@ -144,6 +184,84 @@ def call_padron_a5_get_persona(token: str, sign: str, cuit: str) -> dict:
     resp = client.service.getPersona_v2(token, sign, int(cuit), int(cuit))
 
     return serialize_object(resp)
+
+def call_wsfe_get_ptos_venta(env: str, token: str, sign: str, cuit: str) -> tuple[list[int], dict]:
+
+    env = norm_env(env)
+    wsdl = WSFE_WSDL.get(env)
+    if not wsdl:
+        raise ValueError(f"No hay WSDL configurado para env={env}")
+
+    session = make_afip_legacy_session() if env in ("produccion", "demo") else requests.Session()
+    transport = Transport(session=session, timeout=30)
+    client = Client(wsdl, transport=transport)
+
+    auth = {"Token": token, "Sign": sign, "Cuit": int(cuit)}
+
+    try:
+        resp = client.service.FEParamGetPtosVenta(Auth=auth)
+    except TypeError:
+        resp = client.service.FEParamGetPtosVenta(auth)
+
+    raw = serialize_object(resp)
+
+    node = raw
+    if isinstance(node, dict) and "FEParamGetPtosVentaResult" in node:
+        node = node.get("FEParamGetPtosVentaResult")
+    if isinstance(node, dict) and "ResultGet" in node:
+        node = node.get("ResultGet")
+
+    def _deep_find(obj, keys_lower):
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if str(k).lower() in keys_lower:
+                    return v
+                got = _deep_find(v, keys_lower)
+                if got is not None:
+                    return got
+        elif isinstance(obj, list):
+            for it in obj:
+                got = _deep_find(it, keys_lower)
+                if got is not None:
+                    return got
+        return None
+
+    pto_entries = None
+    if isinstance(node, dict):
+        pto_entries = node.get("PtoVenta") or node.get("PtoVta") or node.get("PuntosVenta")
+        if isinstance(pto_entries, dict):
+            pto_entries = pto_entries.get("PtoVenta") or pto_entries.get("item") or pto_entries
+
+    if pto_entries is None:
+        pto_entries = _deep_find(node, {"ptoventa", "ptovta", "puntosventa", "puntos_venta"})
+
+    ptos: list[int] = []
+
+    def _add_nro(d: dict):
+        nro = d.get("Nro") or d.get("nro") or d.get("PtoVta") or d.get("ptoVta") or d.get("numero") or d.get("Numero")
+        try:
+            n = int(nro)
+        except Exception:
+            return
+        ptos.append(n)
+
+    if isinstance(pto_entries, list):
+        for it in pto_entries:
+            if isinstance(it, dict):
+                _add_nro(it)
+            else:
+                try:
+                    _add_nro(serialize_object(it) or {})
+                except Exception:
+                    continue
+    elif isinstance(pto_entries, dict):
+        _add_nro(pto_entries)
+
+    ptos_sorted = sorted(set(ptos))
+    return ptos_sorted, raw
+
 
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -318,6 +436,19 @@ def refresh_arca(cuit: str):
     env = norm_env(cuit_item.get("environment", "demo"))
 
     cert_path, key_path = get_cert_key_paths_for_env(cuit, env)
+
+    try:
+        token_fe, sign_fe = obtener_token_sign_con_wsaa_cliente(env, "wsfe", cert_path, key_path)
+
+        pv_list, pv_raw = call_wsfe_get_ptos_venta(env, token_fe, sign_fe, cuit)
+
+        cuit_item["puntos_venta"] = pv_list
+        cuit_item["wsfe_ptos_venta_raw"] = pv_raw
+        cuit_item.pop("wsfe_ptos_venta_error", None)
+    except Exception as e:
+
+        cuit_item["wsfe_ptos_venta_error"] = str(e)
+
 
     token, sign = obtener_token_sign_con_wsaa_cliente(
         env,
