@@ -3,6 +3,8 @@ from pathlib import Path
 import re
 import shutil
 import json
+import os
+import sys
 from datetime import datetime
 from pydantic import BaseModel
 from .excel_config import sync_row2_all_tipos
@@ -19,7 +21,9 @@ import requests
 import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
-
+import glob
+from datetime import datetime, timedelta
+from pathlib import Path
 
 PADRON_A5_WSDL = "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5?wsdl"  # :contentReference[oaicite:4]{index=4}
 
@@ -27,6 +31,9 @@ WSFE_WSDL = {
     "demo": "https://wswhomo.afip.gov.ar/wsfev1/service.asmx?WSDL",
     "produccion": "https://servicios1.afip.gov.ar/wsfev1/service.asmx?WSDL",
 }
+
+WSAA_WSDL_PROD = "https://wsaa.afip.gov.ar/ws/services/LoginCms?WSDL"
+WSAA_WSDL_HOMO = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms?WSDL"
 
 class AFIPLegacyTLSAdapter(HTTPAdapter):
     def __init__(self, ssl_context: ssl.SSLContext, **kwargs):
@@ -75,105 +82,150 @@ def get_cert_key_paths_for_env(cuit: str, env: str) -> tuple[Path, Path]:
     return cert_path, key_path
 
 
-def obtener_token_sign_con_wsaa_cliente(env: str, servicio: str, cert_path: Path, key_path: Path) -> tuple[str, str]:
-    env = norm_env(env)
+def parse_login_ticket_response(xml_path: str) -> tuple[str, str]:
 
-    svc = (servicio or "").strip().lower()
-    if svc in ("padron", "padron_a5", "a5"):
-        service_id = "ws_sr_padron_a5"
-    elif svc in ("constancia", "constancia_inscripcion", "constancia-inscripcion"):
-        service_id = "ws_sr_constancia_inscripcion"
-    else:
-        service_id = (servicio or "").strip()
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
 
-    wsaa_wsdl = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms?WSDL" if env == "demo" else "https://wsaa.afip.gov.ar/ws/services/LoginCms?WSDL"
+    token_el = root.find(".//token")
+    sign_el = root.find(".//sign")
 
-    ps1_candidates = [
-        cert_path.parent / "wsaa-cliente.ps1",
-        cert_path.parent / "wsaa_cliente.ps1",
-        BASE_DIR / "wsaa-cliente.ps1",
-        BASE_DIR / "wsaa_cliente.ps1",
+    token = token_el.text.strip() if token_el is not None and token_el.text else ""
+    sign = sign_el.text.strip() if sign_el is not None and sign_el.text else ""
+
+    if not token or not sign:
+        raise RuntimeError(f"No se encontró token/sign en: {xml_path}")
+
+    return token, sign
+
+
+def _wsaa_wsdl_for_env(env: str) -> str:
+    e = (env or "").strip().lower()
+    # ajustá si tus env se llaman distinto
+    if e in ("demo", "testing", "test", "homo", "homologacion", "homologación"):
+        return WSAA_WSDL_HOMO
+    return WSAA_WSDL_PROD
+
+def _wsaa_stamp_filename(service_id) -> str:
+    # a prueba de errores por si llega Path
+    sid = service_id
+    if isinstance(sid, Path):
+        sid = sid.name
+    sid = str(sid or "").strip().lower()
+
+    if sid == "wsfe":
+        return "UltimoTokenWSFEV1.txt"
+    if sid == "wsmtxca":
+        return "UltimoTokenWSMTXCA.txt"
+    return "UltimoTokenPADRON.txt"
+
+def _read_stamp_if_fresh(stamp_path: Path, timeout_min: int) -> bool:
+    if not stamp_path.exists():
+        return False
+    try:
+        raw = stamp_path.read_text(encoding="utf-8").strip()
+        try:
+            ts = datetime.fromisoformat(raw.replace("Z", ""))
+        except Exception:
+            ts = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+        return datetime.now() - ts <= timedelta(minutes=timeout_min)
+    except Exception:
+        return False
+
+def _write_stamp(stamp_path: Path) -> None:
+    stamp_path.write_text(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+
+def _find_latest_login_ticket_response(run_dir: Path) -> Path | None:
+    candidates = []
+    candidates += list(run_dir.glob("*-loginTicketResponse.xml"))
+    candidates += list(run_dir.glob("loginTicketResponse.xml"))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+def _parse_login_ticket_response(xml_path: Path) -> tuple[str, str]:
+    txt = xml_path.read_text(encoding="utf-8", errors="ignore")
+    root = ET.fromstring(txt)
+    token = (root.findtext(".//credentials/token") or "").strip()
+    sign = (root.findtext(".//credentials/sign") or "").strip()
+    if not token or not sign:
+        raise RuntimeError(f"No se pudo extraer token/sign desde {xml_path.name}")
+    return token, sign
+
+def _cleanup_wsaa_artifacts(run_dir: Path) -> None:
+    patterns = [
+        "*-LoginTicketRequest.xml",
+        "*-LoginTicketRequest.xml.cms*",
+        "*-loginTicketResponse.xml",
+        "*-loginTicketResponse-ERROR.xml",
+        "*-LoginTicketRequest.xml.cms-DER*",
     ]
-    ps1_path = next((p for p in ps1_candidates if p.exists()), None)
-    if not ps1_path:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "No se encontró wsaa-cliente.ps1. "
-                f"Busqué en: {', '.join(str(p) for p in ps1_candidates)}"
-            ),
-        )
+    for pat in patterns:
+        for f in run_dir.glob(pat):
+            try:
+                f.unlink()
+            except Exception:
+                pass
 
-    run_dir = cert_path.parent / "_wsaa_tmp"
-    run_dir.mkdir(parents=True, exist_ok=True)
+def obtener_token_sign_con_wsaa_cliente(
+    env: str,
+    service_id: str,
+    cert_path: Path,
+    key_path: Path,
+    timeout_min: int = 10
+) -> tuple[str, str]:
+
+    wsaa_wsdl = _wsaa_wsdl_for_env(env)
+
+    cert_path = Path(cert_path)
+    key_path = Path(key_path)
+    run_dir = cert_path.parent
+
+    stamp_path = run_dir / _wsaa_stamp_filename(service_id)
+
+    # Reusar token si está fresco
+    if _read_stamp_if_fresh(stamp_path, timeout_min):
+        latest = _find_latest_login_ticket_response(run_dir)
+        if latest:
+            return _parse_login_ticket_response(latest)
+
+    # Renovar
+    _cleanup_wsaa_artifacts(run_dir)
+
+    ps1_path = run_dir / "wsaa-cliente.ps1"
+    if not ps1_path.exists():
+        raise FileNotFoundError(f"No existe wsaa-cliente.ps1 en: {run_dir}")
 
     cmd = [
         "powershell",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(ps1_path),
-        "-Certificado",
-        str(cert_path),
-        "-ClavePrivada",
-        str(key_path),
-        "-ServicioId",
-        service_id,
-        "-WsaaWsdl",
-        wsaa_wsdl,
+        "-ExecutionPolicy", "Bypass",
+        "-File", str(ps1_path),
+        "-Certificado", str(cert_path),
+        "-ClavePrivada", str(key_path),
+        "-ServicioId", str(service_id),
+        "-WsaaWsdl", str(wsaa_wsdl),
     ]
 
-    try:
-        completed = subprocess.run(
-            cmd,
-            cwd=str(run_dir),
-            capture_output=True,
-            text=True,
-            timeout=90,
-            check=False,
+    result = subprocess.run(
+        cmd,
+        cwd=str(run_dir),
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "WSAA falló.\n"
+            f"STDOUT:\n{result.stdout}\n\n"
+            f"STDERR:\n{result.stderr}"
         )
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="No se pudo ejecutar PowerShell (no encontrado).")
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Timeout ejecutando wsaa-cliente.ps1.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error ejecutando wsaa-cliente.ps1: {e}")
 
-    ok_files = sorted(run_dir.glob("*-loginTicketResponse.xml"), key=lambda p: p.stat().st_mtime, reverse=True)
-    err_files = sorted(run_dir.glob("*-loginTicketResponse-ERROR.xml"), key=lambda p: p.stat().st_mtime, reverse=True)
+    latest = _find_latest_login_ticket_response(run_dir)
+    if not latest:
+        raise RuntimeError(f"WSAA OK pero no apareció loginTicketResponse.xml en {run_dir}")
 
-    if not ok_files:
-        if err_files:
-            err_msg = err_files[0].read_text(encoding="utf-8", errors="ignore").strip()
-        else:
-            err_msg = ((completed.stdout or "") + "" + (completed.stderr or "")).strip()
-            err_msg = err_msg or "No se generó loginTicketResponse.xml (sin detalle)."
-
-        raise HTTPException(status_code=502, detail=f"WSAA ERROR: {err_msg}")
-
-    ltr_path = ok_files[0]
-
-    try:
-        xml_text = ltr_path.read_text(encoding="utf-8", errors="ignore")
-        root = ET.fromstring(xml_text)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"WSAA devolvió XML inválido: {e}")
-
-    def _find_tag_text(tag_name: str):
-        for el in root.iter():
-            t = el.tag.split("}")[-1] if isinstance(el.tag, str) else el.tag
-            if t == tag_name:
-                return (el.text or "").strip()
-        return None
-
-    token = _find_tag_text("token")
-    sign = _find_tag_text("sign")
-
-    if not token or not sign:
-        snippet = xml_text[:500].replace("", " ")
-        raise HTTPException(status_code=502, detail=f"No se encontraron token/sign en loginTicketResponse.xml. Snippet: {snippet}")
-
+    token, sign = _parse_login_ticket_response(latest)
+    _write_stamp(stamp_path)
     return token, sign
 
 def call_padron_a5_get_persona(token: str, sign: str, cuit: str) -> dict:
@@ -499,10 +551,24 @@ def refresh_arca(cuit: str):
     }
 
 def get_base_dir() -> Path:
-    p = Path(__file__).resolve()
 
+    env_root = os.getenv("INVOICER_PROJECT_ROOT") or os.getenv("INVOICER_BASE_DIR")
+    if env_root:
+        cand = Path(env_root).resolve()
+        if cand.exists():
+            return cand
+
+
+    if getattr(sys, "frozen", False):
+        cand = Path(sys.executable).resolve().parent
+        if (cand / "Usuarios").exists() or (cand / "sources").exists() or (cand / "Configuraciones").exists() or (cand / "configuraciones").exists():
+            return cand
+
+    p = Path(__file__).resolve()
     for parent in [p.parent, *p.parents]:
-        if (parent / "Usuarios").exists() or (parent / "sources").exists() or (parent / "Configuraciones").exists():
+        if (parent / "Usuarios").exists() or (parent / "sources").exists() or (parent / "Configuraciones").exists() or (parent / "configuraciones").exists():
+            if parent.name.lower() == "_internal":
+                continue
             return parent
 
     return p.parents[2]
@@ -510,9 +576,11 @@ def get_base_dir() -> Path:
 BASE_DIR = get_base_dir()
 USUARIOS_DIR = BASE_DIR / "Usuarios"
 SOURCES_DIR = BASE_DIR / "sources"
-CONFIG_DIR = BASE_DIR / "Configuraciones"
+CONFIG_DIR = BASE_DIR / ("Configuraciones" if (BASE_DIR / "Configuraciones").exists() else "configuraciones")
 CUITS_JSON = CONFIG_DIR / "cuits.json"
 CONFIG_XLSX = CONFIG_DIR / "Config.xlsx"
+
+print(f"[config_cuits] BASE_DIR={BASE_DIR} | CONFIG_DIR={CONFIG_DIR} | CUITS_JSON={CUITS_JSON} | exists={CUITS_JSON.exists()} | CWD={Path.cwd()}")
 
 AUTH_ABC_NEW = "Autorizacion_ABC_sin_item"
 AUTH_AB_NEW  = "Autorizacion_AB_con_item"
@@ -562,12 +630,26 @@ def ensure_dirs():
 
 def load_cuits_db() -> dict:
     ensure_dirs()
-    if CUITS_JSON.exists():
-        try:
-            return json.loads(CUITS_JSON.read_text(encoding="utf-8"))
-        except Exception:
+
+    try:
+        raw = CUITS_JSON.read_text(encoding="utf-8-sig")
+        raw = raw.strip()
+        if not raw:
             return {"cuits": []}
-    return {"cuits": []}
+
+        db = json.loads(raw)
+
+        # Normalizar estructura
+        if not isinstance(db, dict):
+            return {"cuits": []}
+        if "cuits" not in db or not isinstance(db.get("cuits"), list):
+            db["cuits"] = []
+        return db
+
+    except Exception as e:
+        print(f"[config_cuits] ERROR leyendo {CUITS_JSON}: {e}")
+        return {"cuits": []}
+
 
 def save_cuits_db(db: dict):
     ensure_dirs()

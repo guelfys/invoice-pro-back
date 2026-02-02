@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, Response
+from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Dict
@@ -9,7 +11,28 @@ from .excel_config import list_cuits, get_config_by_cuit, upsert_config_by_cuit
 from .config_cuits import router as config_cuits_router
 from .uploads_facturacion import router as uploads_facturacion_router
 
+from pathlib import Path
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
+
 app = FastAPI(title="InvoicerPRO API", version="0.1.0")
+
+@app.middleware("http")
+async def fix_double_api_prefix(request: Request, call_next):
+    path = request.scope.get("path", "")
+    if path.startswith("/api/api/"):
+        request.scope["path"] = path.replace("/api/api/", "/api/", 1)
+    return await call_next(request)
+
+DIST_DIR = Path(__file__).resolve().parent / "web" / "dist"
+FAVICON_PATH = DIST_DIR / "favicon.ico"
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    if FAVICON_PATH.exists():
+        return FileResponse(FAVICON_PATH)
+    return Response(status_code=204)
 
 app.include_router(config_cuits_router)
 app.include_router(uploads_facturacion_router)
@@ -89,3 +112,25 @@ def jobs_log(job_id: str):
         return {"id": job_id, "log": tail_log(job_id)}
     except KeyError:
         raise HTTPException(status_code=404, detail="Job not found")
+
+
+_dist_dir = Path(__file__).resolve().parent / "web" / "dist"
+if _dist_dir.exists():
+
+    app.mount("/", StaticFiles(directory=str(_dist_dir), html=False), name="frontend")
+
+    @app.exception_handler(404)
+    async def _spa_fallback(request: Request, exc): 
+        path = request.url.path or "/"
+
+        if path.startswith("/api") or path.startswith("/docs") or path.startswith("/openapi") or path.startswith("/redoc"):
+            return Response("Not Found", status_code=404)
+
+        last = path.rsplit("/", 1)[-1]
+        if "." in last:
+            return Response("Not Found", status_code=404)
+
+        index = _dist_dir / "index.html"
+        if index.exists():
+            return FileResponse(str(index))
+        return Response("Not Found", status_code=404)

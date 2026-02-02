@@ -28,4 +28,11 @@ backend_api/readme.md
 configuraciones/UltimoTokenWSFEV1.txt
 Usuarios
 .venv
-configuraciones/cuits.json
+Release_InvoicerPRO
+build_portable.bat
+InvoicerPRO.exe
+InvoicerPRO.spec
+run_app.py
+backend_api/app/web
+build 
+dist

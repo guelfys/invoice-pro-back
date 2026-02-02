@@ -2,6 +2,7 @@ import os
 import uuid
 import subprocess
 import threading
+import sys
 from dataclasses import dataclass
 from typing import Dict, Optional, List
 
@@ -20,6 +21,31 @@ _jobs: Dict[str, Job] = {}
 
 def get_job(job_id: str) -> Job:
     return _jobs[job_id]
+
+
+def _is_frozen_exe() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def _runtime_root(project_root: str) -> str:
+
+    if _is_frozen_exe():
+        return os.path.dirname(sys.executable)
+    return project_root
+
+
+def _build_cmd(
+    python_exe: str,
+    full_script: str,
+    args: List[str],
+) -> List[str]:
+
+    if _is_frozen_exe():
+        script_name = os.path.basename(full_script).lower()
+        mode = "prod" if "produccion" in script_name or "producción" in script_name else "demo"
+        return [sys.executable, "--run-generator", mode, *args]
+
+    return [python_exe, "-u", full_script, *args]
 
 
 def create_job(
@@ -52,21 +78,25 @@ def create_job(
             env.update(env_overrides)
 
         args = script_args or []
-        cmd = [python_exe, "-u", full_script, *args]
+
+        cwd = _runtime_root(project_root)
+
+        cmd = _build_cmd(python_exe, full_script, args)
 
         try:
             with open(log_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(f"[JOB {job_id}] Ejecutando:\n")
-                f.write(f"  PYTHON: {python_exe}\n")
+                f.write(f"  EXE/PY: {python_exe}\n")
                 f.write(f"  SCRIPT: {full_script}\n")
-                f.write(f"  CWD:    {project_root}\n")
+                f.write(f"  CWD:    {cwd}\n")
                 f.write(f"  ARGS:   {args}\n")
+                f.write(f"  CMD:    {cmd}\n")
                 f.write("\n")
                 f.flush()
 
                 proc = subprocess.Popen(
                     cmd,
-                    cwd=project_root,
+                    cwd=cwd,
                     stdout=f,
                     stderr=subprocess.STDOUT,
                     env=env,

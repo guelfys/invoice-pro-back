@@ -24,7 +24,7 @@ class Settings(BaseModel):
 
     config_excel_path: str = os.getenv(
         "INVOICER_CONFIG_XLSX",
-        os.path.join(project_root, "Configuraciones", "Config.xlsx"),
+        os.path.join(project_root, "configuraciones", "Config.xlsx"),
     )
 
 settings = Settings()
