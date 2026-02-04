@@ -36,3 +36,5 @@ run_app.py
 backend_api/app/web
 build 
 dist
+tools
+configuraciones/cuits.json

@@ -222,7 +222,11 @@ def obtener_token_sign_con_wsaa_cliente(
 
     latest = _find_latest_login_ticket_response(run_dir)
     if not latest:
-        raise RuntimeError(f"WSAA OK pero no apareció loginTicketResponse.xml en {run_dir}")
+        raise RuntimeError(
+            f"WSAA OK pero no apareció loginTicketResponse.xml en {run_dir}\n"
+            f"STDOUT:\n{result.stdout}\n\n"
+            f"STDERR:\n{result.stderr}"
+        )
 
     token, sign = _parse_login_ticket_response(latest)
     _write_stamp(stamp_path)

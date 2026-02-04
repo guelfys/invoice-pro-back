@@ -9,6 +9,7 @@ import base64
 import datetime as _dt
 import tempfile
 from io import BytesIO
+from facturasOuput.qr_rescue import asegurar_qr_en_factura
 
 try:
     import qrcode  
@@ -383,6 +384,21 @@ def post_procesar_imagenes_y_qr(plantilla_path, factura_output, *, config, tipo_
 #!
 #! ------------------------------------------------------------------------------------------------------------------------------------------------------
 
+def qr_presente_en_xlsx(xlsx_path: str) -> bool:
+
+    try:
+        wb = load_workbook(xlsx_path)
+        for sh in ("Hoja1", "Hoja2", "Hoja3"):
+            if sh in wb.sheetnames:
+                ws = wb[sh]
+                imgs = getattr(ws, "_images", [])
+                if imgs and len(imgs) > 0:
+                    return True
+        return False
+    except Exception:
+
+        return False
+
 def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, config, ListaValidacionCAE, tipo_factura, tipo_nota):
     # Convertir datos y cuerpo_solicitud a DataFrame si son listas
     contador_input = 2
@@ -638,6 +654,7 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
             wb.save(factura_output)
             escribir_log(f"{obtener_timestamp()} - Factura generada y guardada en {factura_output}.")
 
+            # 1) Post-procesado general (copia imágenes + intenta QR)
             try:
                 post_procesar_imagenes_y_qr(
                     plantilla_path,
@@ -651,6 +668,18 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
             except Exception as e:
                 escribir_log(f"{obtener_timestamp()} - WARNING: Falló el post-procesado de imágenes/QR: {e}")
 
+            # 2) Reintento SOLO si falta el QR (para que sea “sí o sí”)
+            try:
+                if not qr_presente_en_xlsx(factura_output):
+                    asegurar_qr_en_factura(
+                        factura_output,
+                        config=config,
+                        solicitud=solicitud,
+                        validacion=validacion,
+                    )
+            except Exception as e:
+                escribir_log(f"{obtener_timestamp()} - WARNING: Falló el reintento del QR: {e}")
+        
         
         except Exception as e:
                 escribir_log(f"{obtener_timestamp()} - Error al completar plantilla para índice {i}: {str(e)}")

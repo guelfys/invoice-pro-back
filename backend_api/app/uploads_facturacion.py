@@ -28,15 +28,25 @@ def _validate_xlsx(upload: UploadFile, tipo: str) -> None:
 
 @router.post("/api/generar/facturacion/upload")
 async def upload_facturacion(
-    tipo: Optional[str] = Form(default=None),
-    file: Optional[UploadFile] = File(default=None),
+    tipo: str = Form(None),
+    clear_others: bool = Form(False),
+    file: UploadFile = File(None),
+    fileA: UploadFile = File(None),
+    fileB: UploadFile = File(None),
+    fileC: UploadFile = File(None),
 
-    fileA: Optional[UploadFile] = File(default=None),
-    fileB: Optional[UploadFile] = File(default=None),
-    fileC: Optional[UploadFile] = File(default=None),
-
-    clear_others: bool = Form(default=True),
+    factura_a: UploadFile = File(None),
+    factura_b: UploadFile = File(None),
+    factura_c: UploadFile = File(None),
 ):
+    
+    if fileA is None and factura_a is not None:
+        fileA = factura_a
+    if fileB is None and factura_b is not None:
+        fileB = factura_b
+    if fileC is None and factura_c is not None:
+        fileC = factura_c
+
     files_map: Dict[str, UploadFile] = {}
 
     if tipo and file:
