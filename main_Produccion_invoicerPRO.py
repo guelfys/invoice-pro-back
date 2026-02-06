@@ -599,7 +599,9 @@ def main():
                         escribir_log(f"{obtener_timestamp()} - Error: No se encontró la plantilla en {ruta_archivo_excel}")
                     else:
                         # Construir la nueva ruta de salida en la carpeta FACTURAS_DIR con el nombre dinámico
-                        input_facturacion_path = os.path.join(FACTURAS_DIR, f"{timestamp}.xlsx")
+                        carpeta_facturas_dia = os.path.join(FACTURAS_DIR, datetime.now().strftime("%d-%m-%Y"))
+                        os.makedirs(carpeta_facturas_dia, exist_ok=True)
+                        input_facturacion_path = os.path.join(carpeta_facturas_dia, f"{timestamp}.xlsx")
                         
                         try:
                             # Copiar y renombrar la plantilla

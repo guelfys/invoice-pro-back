@@ -1,8 +1,10 @@
 from backend.log import escribir_log, obtener_timestamp
 import pandas as pd
 from openpyxl import load_workbook
+from openpyxl.styles import Font
 import win32com.client as win32
 import os
+import shutil
 import re
 import json
 import base64
@@ -51,11 +53,7 @@ def _to_float_safe(v, default=0.0):
         return default
 
 def _set_num(ws, cell_ref, value, fmt="#,##0.00"):
-    """
-    Escribe un número real (float) en la celda y fuerza formato SIN símbolo $.
-    - Si value viene vacío / None => 0.0
-    - Respeta decimales 2 (0,00 en Excel con locale ES)
-    """
+
     try:
         if value is None:
             v = 0.0
@@ -81,10 +79,7 @@ def _set_num(ws, cell_ref, value, fmt="#,##0.00"):
 
 
 def _fecha_full_date(v):
-    """
-    Devuelve "YYYY-MM-DD" (RFC3339 full-date).
-    Acepta datetime/date, string 'YYYYMMDD', 'YYYY-MM-DD', 'DD/MM/YYYY', etc.
-    """
+
     if v is None:
         return None
     if isinstance(v, (_dt.date, _dt.datetime)):
@@ -192,10 +187,7 @@ def _qr_png_bytes(qr_url):
 
 
 def restaurar_imagenes_desde_plantilla_excel(plantilla_path, salida_xlsx_path, hojas=("Hoja1","Hoja2","Hoja3"), skip_cells_por_hoja=None):
-    """
-    Copia TODAS las shapes (imágenes) desde el template hacia el xlsx de salida.
-    skip_cells_por_hoja: dict, ej {"Hoja1": {"A39"}, "Hoja2": {"A39"}, ...} para NO copiar el placeholder del QR.
-    """
+
     skip_cells_por_hoja = skip_cells_por_hoja or {}
     excel = None
     try:
@@ -247,10 +239,7 @@ def restaurar_imagenes_desde_plantilla_excel(plantilla_path, salida_xlsx_path, h
 
 def insertar_qr_en_excel(salida_xlsx_path, qr_png_bytes, hojas=("Hoja1","Hoja2","Hoja3"), anchor_cell="A39",
                          width=110, height=110):
-    """
-    Inserta el QR (PNG) en cada hoja indicada en la celda anchor_cell.
-    - Borra shapes existentes cuya TopLeftCell coincida con anchor_cell (para evitar QR duplicado).
-    """
+
     if not qr_png_bytes:
         return
 
@@ -312,11 +301,7 @@ def insertar_qr_en_excel(salida_xlsx_path, qr_png_bytes, hojas=("Hoja1","Hoja2",
             pass
 
 def post_procesar_imagenes_y_qr(plantilla_path, factura_output, *, config, tipo_nota, tipo_factura, comprobante, validacion):
-    """
-    1) Restaura imágenes del template (logos, 'A COD. 001', etc.) evitando el placeholder del QR.
-    2) Genera QR ARCA y lo inserta en las hojas.
-    Nunca debe romper la generación: si falla, solo loguea WARNING.
-    """
+
     try:
         restaurar_imagenes_desde_plantilla_excel(
             plantilla_path,
@@ -505,13 +490,45 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                 try:
                     ws = wb[hoja_nombre]
 
-                    # Completa las celdas de la hoja
-                    ws['G3'] = config.get("Punto Venta", "-")
-                    ws['G5'] = config.get("Cuit", "-")
-                    ws['B4'] = config.get("Razón Social", "-")
-                    ws['C5'] = config.get("Domicilio Comercial", "-")
+                    # Completa las celdas de la hoja (con ceros a la izquierda donde corresponde)
+                    pto_vta_raw = config.get("Punto Venta", "-")
+                    pto_vta_int = _to_int_safe(pto_vta_raw)
+                    pto_vta_str = f"{pto_vta_int:05d}" if pto_vta_int is not None else str(pto_vta_raw)
+
+                    nro_cmp_int = _to_int_safe(validacion[3])
+                    nro_cmp_str = f"{nro_cmp_int:08d}" if nro_cmp_int is not None else str(validacion[3])
+
+                    razon_social = str(config.get("Razón Social", "-") or "-")
+                    domicilio_comercial = str(config.get("Domicilio Comercial", "-") or "-")
+                    cuit_emisor = str(config.get("Cuit", "-") or "-")
+
+                    ws['G3'] = pto_vta_str
+                    ws['G5'] = cuit_emisor
+                    ws['B4'] = razon_social
+                    ws['C5'] = domicilio_comercial
                     ws['C7'] = config.get("Condición IVA", "-")
-                    ws['I3'] = validacion[3]  # Número del Comprobante
+                    ws['I3'] = nro_cmp_str 
+
+
+                    try:
+                        rs_up = razon_social.upper()
+                        a2_val = ws['A2'].value
+                        if a2_val is None or str(a2_val).strip() == "":
+                            ws['A2'] = rs_up
+                        else:
+
+                            if rs_up not in str(a2_val).upper():
+                                ws['A2'] = f"{str(a2_val)} - {rs_up}"
+                        ws['A2'].font = ws['A2'].font.copy(sz=10)
+                    except Exception:
+                        pass
+
+
+                    try:
+                        ws['C5'].font = ws['C5'].font.copy(sz=7)
+                    except Exception:
+                        pass
+
                     # Agregar CAE y fecha de vencimiento del CAE
                     ws['H38'] = validacion[1]  # CAE
                     ws['H39'] = validacion[2]  # Fecha vencimiento CAE
@@ -638,19 +655,23 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                     escribir_log(f"{obtener_timestamp()} - Error: La hoja {hoja_nombre} no existe en el archivo de plantilla.")
                 except Exception as e:
                     escribir_log(f"{obtener_timestamp()} - Error al intentar completar la hoja {hoja_nombre}: {e}")
+            # Guardar la factura en un nuevo archivo (nombre estándar: CUIT_TIPO(3)_PTO(5)_NRO(8))
+            try:
+                cuit_arch = _solo_digitos(config.get("Cuit", ""))
+                tipo_cmp = _map_tipo_cmp(tipo_nota, tipo_factura)
+                tipo_cmp_str = f"{int(tipo_cmp):03d}" if tipo_cmp is not None else "000"
 
+                pto_vta_int = _to_int_safe(config.get("Punto Venta"))
+                pto_vta_str = f"{pto_vta_int:05d}" if pto_vta_int is not None else str(config.get("Punto Venta", "-"))
 
-            # Guardar la factura en un nuevo archivo
+                nro_cmp_int = _to_int_safe(validacion[3])
+                nro_cmp_str = f"{nro_cmp_int:08d}" if nro_cmp_int is not None else str(validacion[3])
 
-            if "Plantilla_credito" in plantilla_path:
-                factura_output = plantilla_path.replace(f"Plantilla_credito_{tipo_factura}", "NotaCredito").replace(".xlsx", f"_{tipo_factura}_N{validacion[3]}.xlsx")
+                nombre_base = f"{cuit_arch}_{tipo_cmp_str}_{pto_vta_str}_{nro_cmp_str}"
+            except Exception:
+                nombre_base = f"Comprobante_{validacion[3]}"
 
-            elif "Plantilla_debito" in plantilla_path:
-                factura_output = plantilla_path.replace(f"Plantilla_debito_{tipo_factura}", "NotaDebito").replace(".xlsx", f"_{tipo_factura}_N{validacion[3]}.xlsx")
-
-            elif "Plantilla_factura" in plantilla_path:
-                factura_output = plantilla_path.replace(f"Plantilla_factura_{tipo_factura}", "Factura").replace(".xlsx", f"_{tipo_factura}_N{validacion[3]}.xlsx")
-
+            factura_output = os.path.join(os.path.dirname(plantilla_path), f"{nombre_base}.xlsx")
             wb.save(factura_output)
             escribir_log(f"{obtener_timestamp()} - Factura generada y guardada en {factura_output}.")
 
@@ -689,30 +710,62 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
 
 #! FUNCIONALIDAD PARA ARMAR PDF's Y LUEGO ALMACENARLOS EN LA CARPETA CORRESPONDIENTE
 def convertir_xlsx_a_pdf(carpeta_origen, carpeta_destino):
-    # Iterar sobre los archivos en la carpeta de origen
-    for archivo in os.listdir(carpeta_origen):
-        # Inicializar la aplicación de Excel
-        excel = win32.Dispatch('Excel.Application')
-        excel.Visible = False  # Asegurarse de que Excel no sea visible
 
-        if archivo.endswith('.xlsx'):
+    carpeta_dia = os.path.join(carpeta_destino, _dt.datetime.now().strftime("%d-%m-%Y"))
+    os.makedirs(carpeta_dia, exist_ok=True)
+
+    excel = win32.Dispatch('Excel.Application')
+    excel.Visible = False
+    try:
+        # Evitar prompts de Excel
+        try:
+            excel.DisplayAlerts = False
+        except Exception:
+            pass
+
+        for archivo in os.listdir(carpeta_origen):
+            if not archivo.lower().endswith('.xlsx'):
+                continue
+            if archivo.startswith('~$'):
+                continue  # temporales de Excel
+
             ruta_xlsx = os.path.join(carpeta_origen, archivo)
-            ruta_pdf = os.path.join(carpeta_destino, os.path.splitext(archivo)[0] + '.pdf')
+            ruta_pdf = os.path.join(carpeta_dia, os.path.splitext(archivo)[0] + '.pdf')
 
+            workbook = None
             try:
-                # Abrir el archivo de Excel
                 workbook = excel.Workbooks.Open(ruta_xlsx)
-
-                # Guardar como PDF
                 workbook.ExportAsFixedFormat(0, ruta_pdf)
-                
-                # Cerrar el libro de trabajo sin guardar cambios
                 workbook.Close(SaveChanges=False)
+
                 print(f"{obtener_timestamp()} - Convertido: {archivo} a {ruta_pdf}")
                 escribir_log("")
                 escribir_log(f"{obtener_timestamp()} - Convertido: {archivo} a {ruta_pdf}")
+
             except Exception as e:
                 print(f"{obtener_timestamp()} - Error al convertir {archivo}: {e}")
-            finally:
-                # Cerrar la aplicación de Excel
-                excel.Quit()
+                escribir_log(f"{obtener_timestamp()} - Error al convertir {archivo}: {e}")
+                try:
+                    if workbook is not None:
+                        workbook.Close(SaveChanges=False)
+                except Exception:
+                    pass
+
+            # Mover el xlsx al folder del día (convertido o no)
+            try:
+                destino_xlsx = os.path.join(carpeta_dia, archivo)
+                if os.path.exists(destino_xlsx):
+                    base, ext = os.path.splitext(archivo)
+                    n = 1
+                    while os.path.exists(os.path.join(carpeta_dia, f"{base}_{n}{ext}")):
+                        n += 1
+                    destino_xlsx = os.path.join(carpeta_dia, f"{base}_{n}{ext}")
+                shutil.move(ruta_xlsx, destino_xlsx)
+            except Exception as e:
+                escribir_log(f"{obtener_timestamp()} - WARNING: No se pudo mover {archivo} a carpeta del día: {e}")
+
+    finally:
+        try:
+            excel.Quit()
+        except Exception:
+            pass
