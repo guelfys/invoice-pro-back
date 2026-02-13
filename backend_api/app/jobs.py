@@ -26,25 +26,16 @@ def get_job(job_id: str) -> Job:
 def _is_frozen_exe() -> bool:
     return bool(getattr(sys, "frozen", False))
 
-
 def _runtime_root(project_root: str) -> str:
-
     if _is_frozen_exe():
         return os.path.dirname(sys.executable)
     return project_root
 
-
-def _build_cmd(
-    python_exe: str,
-    full_script: str,
-    args: List[str],
-) -> List[str]:
-
+def _build_cmd(python_exe: str, full_script: str, args: List[str]) -> List[str]:
     if _is_frozen_exe():
         script_name = os.path.basename(full_script).lower()
         mode = "prod" if "produccion" in script_name or "producción" in script_name else "demo"
         return [sys.executable, "--run-generator", mode, *args]
-
     return [python_exe, "-u", full_script, *args]
 
 

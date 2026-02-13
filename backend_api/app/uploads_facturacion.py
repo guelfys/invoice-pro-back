@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from typing import Dict, List, Optional
+from typing import Dict, List
 from pathlib import Path
-import os
 import shutil
 
 from .settings import settings
 
 router = APIRouter()
-
 VALID_TIPOS = {"A", "B", "C"}
 
 def _input_dir_for_tipo(tipo: str) -> Path:
@@ -35,11 +33,12 @@ async def upload_facturacion(
     fileB: UploadFile = File(None),
     fileC: UploadFile = File(None),
 
+
     factura_a: UploadFile = File(None),
     factura_b: UploadFile = File(None),
     factura_c: UploadFile = File(None),
 ):
-    
+
     if fileA is None and factura_a is not None:
         fileA = factura_a
     if fileB is None and factura_b is not None:
@@ -76,8 +75,10 @@ async def upload_facturacion(
                 except Exception as e:
                     raise HTTPException(status_code=500, detail=f"No se pudo borrar {p}: {e}")
 
+    # guardar archivos subidos
     for t, upload in files_map.items():
         _validate_xlsx(upload, t)
+
         out_dir = _input_dir_for_tipo(t)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = _facturacion_path(t)

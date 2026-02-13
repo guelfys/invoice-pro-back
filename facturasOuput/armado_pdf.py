@@ -12,6 +12,7 @@ import datetime as _dt
 import tempfile
 from io import BytesIO
 from facturasOuput.qr_rescue import asegurar_qr_en_factura
+import pythoncom
 
 try:
     import qrcode  
@@ -714,29 +715,93 @@ def convertir_xlsx_a_pdf(carpeta_origen, carpeta_destino):
     carpeta_dia = os.path.join(carpeta_destino, _dt.datetime.now().strftime("%d-%m-%Y"))
     os.makedirs(carpeta_dia, exist_ok=True)
 
-    excel = win32.Dispatch('Excel.Application')
-    excel.Visible = False
+    excel = None
+
+    print(f"{obtener_timestamp()} - [PDF] Iniciando convertir_xlsx_a_pdf()")
+    print(f"{obtener_timestamp()} - [PDF] carpeta_origen: {carpeta_origen}")
+    print(f"{obtener_timestamp()} - [PDF] carpeta_destino: {carpeta_destino}")
+    print(f"{obtener_timestamp()} - [PDF] carpeta_dia: {carpeta_dia}")
+    escribir_log(f"{obtener_timestamp()} - [PDF] Iniciando convertir_xlsx_a_pdf()")
+    escribir_log(f"{obtener_timestamp()} - [PDF] carpeta_origen: {carpeta_origen}")
+    escribir_log(f"{obtener_timestamp()} - [PDF] carpeta_dia: {carpeta_dia}")
+
+    pythoncom.CoInitialize()
+
     try:
-        # Evitar prompts de Excel
+        print(f"{obtener_timestamp()} - [PDF] Creando instancia Excel (DispatchEx)...")
+        escribir_log(f"{obtener_timestamp()} - [PDF] Creando instancia Excel (DispatchEx)...")
+
+        excel = win32.DispatchEx('Excel.Application')
+
+        print(f"{obtener_timestamp()} - [PDF] Excel creado OK")
+        escribir_log(f"{obtener_timestamp()} - [PDF] Excel creado OK")
+
+        try:
+            excel.Visible = False
+            print(f"{obtener_timestamp()} - [PDF] excel.Visible=False OK")
+            escribir_log(f"{obtener_timestamp()} - [PDF] excel.Visible=False OK")
+        except Exception as e:
+            print(f"{obtener_timestamp()} - [PDF] WARNING: No se pudo setear excel.Visible (sigo igual): {e}")
+            escribir_log(f"{obtener_timestamp()} - [PDF] WARNING: No se pudo setear excel.Visible (sigo igual): {e}")
+
         try:
             excel.DisplayAlerts = False
+            print(f"{obtener_timestamp()} - [PDF] excel.DisplayAlerts=False OK")
+        except Exception as e:
+            print(f"{obtener_timestamp()} - [PDF] WARNING: No se pudo setear DisplayAlerts: {e}")
+
+        try:
+            excel.ScreenUpdating = False
+        except Exception:
+            pass
+        try:
+            excel.EnableEvents = False
         except Exception:
             pass
 
-        for archivo in os.listdir(carpeta_origen):
+        archivos = []
+        try:
+            archivos = os.listdir(carpeta_origen)
+        except Exception as e:
+            print(f"{obtener_timestamp()} - [PDF] ERROR: No se pudo listar carpeta_origen: {e}")
+            escribir_log(f"{obtener_timestamp()} - [PDF] ERROR: No se pudo listar carpeta_origen: {e}")
+            return
+
+        print(f"{obtener_timestamp()} - [PDF] Archivos encontrados: {len(archivos)}")
+        escribir_log(f"{obtener_timestamp()} - [PDF] Archivos encontrados: {len(archivos)}")
+
+        for archivo in archivos:
             if not archivo.lower().endswith('.xlsx'):
                 continue
             if archivo.startswith('~$'):
-                continue  # temporales de Excel
+                continue
 
             ruta_xlsx = os.path.join(carpeta_origen, archivo)
             ruta_pdf = os.path.join(carpeta_dia, os.path.splitext(archivo)[0] + '.pdf')
 
+            print(f"{obtener_timestamp()} - [PDF] ----")
+            print(f"{obtener_timestamp()} - [PDF] Procesando XLSX: {ruta_xlsx}")
+            print(f"{obtener_timestamp()} - [PDF] Destino PDF:     {ruta_pdf}")
+            escribir_log(f"{obtener_timestamp()} - [PDF] Procesando XLSX: {ruta_xlsx}")
+            escribir_log(f"{obtener_timestamp()} - [PDF] Destino PDF: {ruta_pdf}")
+
             workbook = None
             try:
+                print(f"{obtener_timestamp()} - [PDF] Abriendo workbook...")
+                escribir_log(f"{obtener_timestamp()} - [PDF] Abriendo workbook...")
+
                 workbook = excel.Workbooks.Open(ruta_xlsx)
+
+                print(f"{obtener_timestamp()} - [PDF] Workbook abierto OK, exportando a PDF...")
+                escribir_log(f"{obtener_timestamp()} - [PDF] Workbook abierto OK, exportando a PDF...")
+
                 workbook.ExportAsFixedFormat(0, ruta_pdf)
+
+                print(f"{obtener_timestamp()} - [PDF] ExportAsFixedFormat OK, cerrando workbook...")
+                escribir_log(f"{obtener_timestamp()} - [PDF] ExportAsFixedFormat OK, cerrando workbook...")
+
                 workbook.Close(SaveChanges=False)
+                workbook = None
 
                 print(f"{obtener_timestamp()} - Convertido: {archivo} a {ruta_pdf}")
                 escribir_log("")
@@ -745,13 +810,15 @@ def convertir_xlsx_a_pdf(carpeta_origen, carpeta_destino):
             except Exception as e:
                 print(f"{obtener_timestamp()} - Error al convertir {archivo}: {e}")
                 escribir_log(f"{obtener_timestamp()} - Error al convertir {archivo}: {e}")
+
                 try:
                     if workbook is not None:
+                        print(f"{obtener_timestamp()} - [PDF] Intentando cerrar workbook tras error...")
                         workbook.Close(SaveChanges=False)
-                except Exception:
-                    pass
+                except Exception as e2:
+                    print(f"{obtener_timestamp()} - [PDF] WARNING: No se pudo cerrar workbook tras error: {e2}")
+                    escribir_log(f"{obtener_timestamp()} - [PDF] WARNING: No se pudo cerrar workbook tras error: {e2}")
 
-            # Mover el xlsx al folder del día (convertido o no)
             try:
                 destino_xlsx = os.path.join(carpeta_dia, archivo)
                 if os.path.exists(destino_xlsx):
@@ -760,12 +827,28 @@ def convertir_xlsx_a_pdf(carpeta_origen, carpeta_destino):
                     while os.path.exists(os.path.join(carpeta_dia, f"{base}_{n}{ext}")):
                         n += 1
                     destino_xlsx = os.path.join(carpeta_dia, f"{base}_{n}{ext}")
+
                 shutil.move(ruta_xlsx, destino_xlsx)
+                print(f"{obtener_timestamp()} - [PDF] Movido XLSX a: {destino_xlsx}")
+                escribir_log(f"{obtener_timestamp()} - [PDF] Movido XLSX a: {destino_xlsx}")
+
             except Exception as e:
+                print(f"{obtener_timestamp()} - [PDF] WARNING: No se pudo mover {archivo} a carpeta del día: {e}")
                 escribir_log(f"{obtener_timestamp()} - WARNING: No se pudo mover {archivo} a carpeta del día: {e}")
 
     finally:
         try:
-            excel.Quit()
+            if excel is not None:
+                print(f"{obtener_timestamp()} - [PDF] Cerrando Excel (Quit)...")
+                escribir_log(f"{obtener_timestamp()} - [PDF] Cerrando Excel (Quit)...")
+                excel.Quit()
+                print(f"{obtener_timestamp()} - [PDF] Excel cerrado OK")
+                escribir_log(f"{obtener_timestamp()} - [PDF] Excel cerrado OK")
+        except Exception as e:
+            print(f"{obtener_timestamp()} - [PDF] WARNING: excel.Quit() falló: {e}")
+            escribir_log(f"{obtener_timestamp()} - [PDF] WARNING: excel.Quit() falló: {e}")
+
+        try:
+            pythoncom.CoUninitialize()
         except Exception:
             pass

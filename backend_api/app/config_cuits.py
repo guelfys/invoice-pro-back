@@ -613,6 +613,37 @@ def norm_env(env: str) -> str:
         return "produccion"
     raise HTTPException(status_code=400, detail="environment inválido. Usá demo o produccion.")
 
+def _extract_puntos_venta_from_raw(raw: dict) -> list[int]:
+    try:
+        pv = raw.get("ResultGet", {}).get("PtoVenta", [])
+        out: list[int] = []
+        if isinstance(pv, list):
+            for it in pv:
+                if isinstance(it, dict) and "Nro" in it:
+                    try:
+                        out.append(int(it["Nro"]))
+                    except Exception:
+                        pass
+
+        return sorted(set(out))
+    except Exception:
+        return []
+
+def _ensure_puntos_venta_fields(it: dict) -> None:
+
+    pv = it.get("puntos_venta")
+    if not (isinstance(pv, list) and len(pv) > 0):
+        raw = it.get("wsfe_ptos_venta_raw")
+        if isinstance(raw, dict):
+            pv2 = _extract_puntos_venta_from_raw(raw)
+            if pv2:
+                it["puntos_venta"] = pv2
+
+    if it.get("selected_punto_venta") is None:
+        pv = it.get("puntos_venta")
+        if isinstance(pv, list) and pv:
+            it["selected_punto_venta"] = pv[0]
+
 def norm_cuit(cuit: str) -> str:
     digits = re.sub(r"\D", "", str(cuit or ""))
     if len(digits) != 11:
@@ -720,13 +751,13 @@ def list_cuits():
 def get_cuit_detail(cuit: str):
     cuit = norm_cuit(cuit)
     db = load_cuits_db()
+
     for it in db.get("cuits", []):
         if str(it.get("cuit")) == cuit:
-            out = dict(it)
-            out.setdefault("selected_punto_venta", 0)
-            out.setdefault("selected_numero_actividad", 0)
-            return out
-    raise HTTPException(status_code=404, detail="CUIT no encontrado.")
+            _ensure_puntos_venta_fields(it)
+            return dict(it)
+
+    raise HTTPException(status_code=404, detail="CUIT no encontrado")
 
 
 @router.post("/cuits")

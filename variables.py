@@ -1,10 +1,22 @@
 import os
 import sys
+from pathlib import Path
 
-#* ----------------------------------------- [DEFINIR RUTA BASE DEL PROYECTO] ----------------------------------------- *# 
-# tiene un IF para que pueda ser corrido tanto por visual studio (script de python)
-# como para que pueda ser ejecutado por un .exe en cualquier lugar de la computadora.
-BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+def _is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+RUNTIME_DIR = Path(sys.executable).resolve().parent if _is_frozen() else Path(__file__).resolve().parent
+
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", str(RUNTIME_DIR))) if _is_frozen() else RUNTIME_DIR
+
+BASE_DIR = str(RUNTIME_DIR)
+
+def resource_path(*parts: str) -> str:
+
+    p1 = RESOURCE_DIR.joinpath(*parts)
+    if p1.exists():
+        return str(p1)
+    return str(RUNTIME_DIR.joinpath(*parts))
 
 #* VARIABLE GENERAL DE CONFIGURACIÓN
 CONFIGURACIONES_DIR = os.path.join(BASE_DIR, 'Configuraciones')
@@ -13,9 +25,29 @@ CONFIGURACIONES_DIR = os.path.join(BASE_DIR, 'Configuraciones')
 ULTIMO_TOKEN_WSFEV1_PATH = os.path.join(CONFIGURACIONES_DIR, 'UltimoTokenWSFEV1.txt')
 ULTIMO_TOKEN_WSMTXCA_PATH = os.path.join(CONFIGURACIONES_DIR, 'UltimoTokenWSMTXCA.txt')
 
-#* DONDE ESTAN LOS .PS1 PARA SER CORRIDOS
-LOGIN_TICKET_RESPONSE_WSFEV1_PATH = os.path.join(BASE_DIR, 'Autorización A, B y C sin item', 'source')
-LOGIN_TICKET_RESPONSE_WSMTXCA_PATH = os.path.join(BASE_DIR, 'Autorización A y B con item', 'source')
+import os
+
+USUARIOS_DIR = os.path.join(BASE_DIR, "Usuarios")
+
+_AUTORIZA_DIR_POR_SERVICIO = {
+    "wsfev1": "Autorizacion_ABC_sin_item",
+    "wsmtxca": "Autorizacion_AB_con_item",
+}
+
+def autorizacion_source_dir(cuit: int | str, servicio: str) -> str:
+    cuit_str = str(cuit).strip()
+    key = (servicio or "").lower().strip()
+
+    if key not in _AUTORIZA_DIR_POR_SERVICIO:
+        raise ValueError(f"Servicio inválido: {servicio}. Use 'wsfev1' o 'wsmtxca'.")
+
+    return os.path.join(USUARIOS_DIR, cuit_str, _AUTORIZA_DIR_POR_SERVICIO[key], "source")
+
+def login_ticket_response_wsfev1_path(cuit: int | str) -> str:
+    return autorizacion_source_dir(cuit, "wsfev1")
+
+def login_ticket_response_wsmtxca_path(cuit: int | str) -> str:
+    return autorizacion_source_dir(cuit, "wsmtxca")
 
 #* CARPETAS DEL PROCESO GENERALES
 CONFIG_PATH = os.path.join(CONFIGURACIONES_DIR, 'Config.txt')
