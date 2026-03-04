@@ -238,11 +238,27 @@ def main():
         (FACTURA_C_DIR, 'C')
     ]
 
+    encontro_facturacion = False
+
     for carpeta, tipo_factura in carpetas_input:
         ruta_archivo_excel = os.path.join(carpeta, 'Facturacion.xlsx')
 
+        escribir_log(f"{obtener_timestamp()} - Buscando Facturacion.xlsx en: {ruta_archivo_excel}")
+        try:
+            if os.path.isdir(carpeta):
+                escribir_log(f"{obtener_timestamp()} - Contenido carpeta ({carpeta}): {os.listdir(carpeta)}")
+            else:
+                escribir_log(f"{obtener_timestamp()} - La carpeta no existe: {carpeta}")
+        except Exception as e:
+            escribir_log(f"{obtener_timestamp()} - No se pudo listar carpeta {carpeta}: {e}")
+
         # Limpiar variables utilizadas
         ListaValidacionCAE.clear()
+
+        if not os.path.exists(ruta_archivo_excel):
+                continue
+
+        encontro_facturacion = True
 
         if os.path.exists(ruta_archivo_excel):
             # Obtener configuración específica para el tipo de factura
@@ -655,22 +671,19 @@ def main():
                 escribir_log(f"{obtener_timestamp()} - Error al conectar al web service para {tipo_factura}: {e}")
 
                 continue
-        else:
-            escribir_log("--------------------------------------------------")
-            escribir_log("No se encontro archivo Facturacion.xlsx, en ninguno de las 3 carpetas listadas")
-            escribir_log("> input/Factura A")
-            escribir_log("> input/Factura B")
-            escribir_log("> input/Factura C")
-            escribir_log(f"{obtener_timestamp()} - Hora de finalización")         
-            escribir_log("--------------------------------------------------")
-            escribir_log("")
-
-            print("--------------------------------------------------")
-            print("No se encontro archivo Facturacion.xlsx, en ninguno de las 3 carpetas listadas")
-            print(f"{obtener_timestamp()} - Horario de Finalización")
-            print("--------------------------------------------------")
-            print("")
   
+    if not encontro_facturacion:
+        escribir_log("--------------------------------------------------")
+        escribir_log("No se encontró Facturacion.xlsx en ninguna carpeta:")
+        escribir_log(f"> {FACTURA_A_DIR}")
+        escribir_log(f"> {FACTURA_B_DIR}")
+        escribir_log(f"> {FACTURA_C_DIR}")
+        escribir_log(f"{obtener_timestamp()} - Hora de finalización")
+        escribir_log("--------------------------------------------------")
+        escribir_log("")
+        cerrar_log()
+        return
+
     try:
         print("")
         print("-----------------------------------------------------")

@@ -30,19 +30,45 @@ def verificar_token(Ultimo_Token_Path):
 #? Función para ejecutar script PowerShell si es necesario
 def ejecutar_powershell(Login_Ticket_Path, Ultimo_Token_Path):
     script_path = os.path.join(Login_Ticket_Path, 'wsaa-cliente.ps1')
-    mensaje = f"{obtener_timestamp()} - Ejecutando script PowerShell: {script_path}\n"
-    eliminar_archivos_patron(Login_Ticket_Path, "*loginTicketResponse.xml")
-    time.sleep(2)
-    try:
-        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path], cwd=Login_Ticket_Path, check=True)
-        mensaje += "Script PowerShell ejecutado correctamente.\n"
-    except subprocess.CalledProcessError as e:
-        mensaje += f"{obtener_timestamp()} - Error al ejecutar PowerShell: {e}\n"
-    finally:
-        with open(Ultimo_Token_Path, 'w') as file:
-            file.write(datetime.now().strftime("%d/%m/%Y %H:%M"))
+
+    escribir_log(f"{obtener_timestamp()} - Ejecutando PS1: {script_path}")
+    escribir_log(f"{obtener_timestamp()} - CWD: {Login_Ticket_Path}")
+
+    # borrar respuestas anteriores
+    eliminar_archivos_patron(Login_Ticket_Path, "*loginTicketResponse*.xml")
+    eliminar_archivos_patron(Login_Ticket_Path, "*loginTicketResponse*.txt")
+    time.sleep(1)
+
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path],
+        cwd=Login_Ticket_Path,
+        capture_output=True,
+        text=True
+    )
+
+    escribir_log(f"{obtener_timestamp()} - PS1 returncode: {result.returncode}")
+    if result.stdout:
+        escribir_log(f"{obtener_timestamp()} - PS1 stdout:\n{result.stdout}")
+    if result.stderr:
+        escribir_log(f"{obtener_timestamp()} - PS1 stderr:\n{result.stderr}")
+
+    # ¿se generó TicketResponse válido?
+    hay_ok = any(
+        ("TicketResponse" in f and f.endswith(".xml") and "ERROR" not in f)
+        for f in os.listdir(Login_Ticket_Path)
+    )
+
+    if result.returncode != 0 or not hay_ok:
+        escribir_log(f"{obtener_timestamp()} - PS1 falló o no generó TicketResponse OK. NO se actualiza UltimoToken.")
+        limpiar_archivos_xml(Login_Ticket_Path)
+        raise RuntimeError("WSAA no generó TicketResponse válido. Revisar log PS1 stdout/stderr y archivo -ERROR.")
+
+    # recién acá: actualizar “último token”
+    with open(Ultimo_Token_Path, 'w') as file:
+        file.write(datetime.now().strftime("%d/%m/%Y %H:%M"))
+
     limpiar_archivos_xml(Login_Ticket_Path)
-    escribir_log(mensaje)
+    escribir_log(f"{obtener_timestamp()} - TicketResponse generado OK y UltimoToken actualizado.")
 
 #? Función para limpiar archivos XML no deseados
 def limpiar_archivos_xml(Login_Ticket_Path):

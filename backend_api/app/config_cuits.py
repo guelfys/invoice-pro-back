@@ -25,7 +25,8 @@ import glob
 from datetime import datetime, timedelta
 from pathlib import Path
 
-PADRON_A5_WSDL = "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5?wsdl"  # :contentReference[oaicite:4]{index=4}
+CONSTANCIA_WSDL = "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5?wsdl"
+CONSTANCIA_SERVICE_ID = "ws_sr_constancia_inscripcion"
 
 WSFE_WSDL = {
     "demo": "https://wswhomo.afip.gov.ar/wsfev1/service.asmx?WSDL",
@@ -232,13 +233,12 @@ def obtener_token_sign_con_wsaa_cliente(
     _write_stamp(stamp_path)
     return token, sign
 
-def call_padron_a5_get_persona(token: str, sign: str, cuit: str) -> dict:
+def call_constancia_get_persona(token: str, sign: str, cuit: str) -> dict:
     session = requests.Session()
     transport = Transport(session=session, timeout=30)
-    client = Client(PADRON_A5_WSDL, transport=transport)
+    client = Client(CONSTANCIA_WSDL, transport=transport)
 
     resp = client.service.getPersona_v2(token, sign, int(cuit), int(cuit))
-
     return serialize_object(resp)
 
 def call_wsfe_get_ptos_venta(env: str, token: str, sign: str, cuit: str) -> tuple[list[int], dict]:
@@ -490,39 +490,74 @@ def refresh_arca(cuit: str):
         raise HTTPException(status_code=404, detail="CUIT no encontrado.")
 
     env = norm_env(cuit_item.get("environment", "demo"))
-
     cert_path, key_path = get_cert_key_paths_for_env(cuit, env)
 
+    # --- 1) WSFE: puntos de venta (ya lo tenías con try/except) ---
     try:
         token_fe, sign_fe = obtener_token_sign_con_wsaa_cliente(env, "wsfe", cert_path, key_path)
-
         pv_list, pv_raw = call_wsfe_get_ptos_venta(env, token_fe, sign_fe, cuit)
 
         cuit_item["puntos_venta"] = pv_list
         cuit_item["wsfe_ptos_venta_raw"] = pv_raw
         cuit_item.pop("wsfe_ptos_venta_error", None)
     except Exception as e:
-
         cuit_item["wsfe_ptos_venta_error"] = str(e)
 
-
-    token, sign = obtener_token_sign_con_wsaa_cliente(
-        env,
-        "ws_sr_constancia_inscripcion",
-        cert_path,
-        key_path
-    )
-
+    # --- 2) CONSTANCIA: token/sign + consulta ---
+    constancia_err = None
     try:
-        padron = call_padron_a5_get_persona(token, sign, cuit)
+        token_c, sign_c = obtener_token_sign_con_wsaa_cliente(
+            env,
+            CONSTANCIA_SERVICE_ID,   # <- estandarizado
+            cert_path,
+            key_path
+        )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error consultando Padrón/Constancia: {e}")
+        constancia_err = f"WSAA/Constancia: {e}"
+        cuit_item["constancia_error"] = constancia_err
 
+        cuit_item["last_refresh"] = datetime.now().isoformat(timespec="seconds")
+        save_cuits_db(db)
+
+        # devolvemos 200 pero ok=False (para que el front muestre toast y siga)
+        return {
+            "ok": False,
+            "cuit": int(cuit),
+            "last_refresh": cuit_item["last_refresh"],
+            "errors": {
+                "constancia": constancia_err,
+                "wsfe": cuit_item.get("wsfe_ptos_venta_error"),
+            },
+            "warnings": cuit_item.get("arca_warnings", []),
+        }
+
+    # Si llegamos acá, hay token/sign de constancia
+    try:
+        padron = call_constancia_get_persona(token_c, sign_c, cuit)
+        cuit_item.pop("constancia_error", None)
+    except Exception as e:
+        constancia_err = f"Error consultando Constancia: {e}"
+        cuit_item["constancia_error"] = constancia_err
+
+        cuit_item["last_refresh"] = datetime.now().isoformat(timespec="seconds")
+        save_cuits_db(db)
+
+        return {
+            "ok": False,
+            "cuit": int(cuit),
+            "last_refresh": cuit_item["last_refresh"],
+            "errors": {
+                "constancia": constancia_err,
+                "wsfe": cuit_item.get("wsfe_ptos_venta_error"),
+            },
+            "warnings": cuit_item.get("arca_warnings", []),
+        }
+
+    # --- 3) Guardar raw/json + mapear a cache fields (tu lógica original) ---
     cuit_item["padron_raw"] = str(padron)
     try:
         cuit_item["padron_json"] = json.dumps(padron, ensure_ascii=False, indent=2, default=str)
     except Exception:
-
         cuit_item["padron_json"] = None
 
     mapped, warnings = map_padron_to_cache_fields(padron)
@@ -531,7 +566,6 @@ def refresh_arca(cuit: str):
 
     if warnings:
         cuit_item.setdefault("arca_warnings", [])
-
         for w in warnings:
             if w not in cuit_item["arca_warnings"]:
                 cuit_item["arca_warnings"].append(w)
@@ -552,6 +586,10 @@ def refresh_arca(cuit: str):
         "last_refresh": cuit_item["last_refresh"],
         "mapped": mapped,
         "warnings": cuit_item.get("arca_warnings", []),
+        "errors": {
+            "wsfe": cuit_item.get("wsfe_ptos_venta_error"),
+            "constancia": cuit_item.get("constancia_error"),
+        }
     }
 
 def get_base_dir() -> Path:

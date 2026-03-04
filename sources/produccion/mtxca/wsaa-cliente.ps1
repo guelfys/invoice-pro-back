@@ -29,6 +29,8 @@ Param(
    $WsaaWsdl = "https://wsaa.afip.gov.ar/ws/services/LoginCms?WSDL"    
 )
 
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $ErrorActionPreference = "Stop"
 
 # PASO 1: ARMAR EL XML DEL TICKET DE ACCESO
@@ -63,7 +65,8 @@ try
 }
 catch
 {
-   $errMsg = $_.Exception.Message
-   $errMsg > $seqNr-loginTicketResponse-ERROR.xml 
-   $errMsg
+   $errFull = $_ | Out-String
+   $errFull > "$seqNr-loginTicketResponse-ERROR.txt"
+   $_.Exception.Message > "$seqNr-loginTicketResponse-ERROR.xml"
+   $errFull
 }
