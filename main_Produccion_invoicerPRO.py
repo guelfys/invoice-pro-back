@@ -3,9 +3,10 @@
 #* [               PROCESO PARA FACTURACIÓN ELECTRONICA                  ]
 #* Realizado por FysTech Group
 #* Desarrollador: Matias Nicolas Franco
-#* Versión: 4.0
+#* Versión: 4.1
 #* Codigo Modularizado
-#* Ultima Update: 28/01/2026 En Proceso
+#* Ultima Update: 10/03/2026 En Proceso
+#? PASO AGREGADO FALTANTE: Modularizar el codigo del main, ya que esta demasiado largo
 #* ----------------------------------------- [IMPORTS] ----------------------------------------- *# 
 
 # * IMPORTS MODULOS
@@ -479,7 +480,7 @@ def main():
                             print(f"{obtener_timestamp()} - Inicia proceso para armar los cuerpos con las solicitudes {servicio}")
                             print("")
                             
-                            cuerpos_solicitud = armar_cuerpo_nota_credito_mtxca(solicitudes_mtxca, client, auth, servicio)
+                            cuerpos_solicitud = armar_cuerpo_nota_credito_mtxca(solicitudes_mtxca, client, auth, servicio, numero_actividad)
 
                         elif servicio == "FEV1":
                             print(f"{obtener_timestamp()} - Inicia proceso para armar solicitudes {servicio}, [NOTA CRÉDITO FEV1]")
@@ -502,7 +503,7 @@ def main():
 
                             print(f"{obtener_timestamp()} - Inicia proceso para armar los cuerpos con las solicitudes {servicio}")
                             print("")
-                            cuerpos_solicitud = armar_cuerpo_nota_credito_fev1(solicitudes_fev1, client, auth, servicio)
+                            cuerpos_solicitud = armar_cuerpo_nota_credito_fev1(solicitudes_fev1, client, auth, servicio, numero_actividad)
 
 
                     #* SEGÚN NOTAS DE DEBITO
@@ -548,7 +549,7 @@ def main():
                             print(f"{obtener_timestamp()} - Inicia proceso para armar los cuerpos con las solicitudes {servicio}")
                             print("")
                             
-                            cuerpos_solicitud = armar_cuerpo_nota_debito_mtxca(solicitudes_mtxca, client, auth, servicio)
+                            cuerpos_solicitud = armar_cuerpo_nota_debito_mtxca(solicitudes_mtxca, client, auth, servicio, numero_actividad)
 
                         elif servicio == "FEV1":
                             print(f"{obtener_timestamp()} - Inicia proceso para armar solicitudes {servicio}, [NOTA DEBITO FEV1]")
@@ -571,7 +572,7 @@ def main():
 
                             print(f"{obtener_timestamp()} - Inicia proceso para armar los cuerpos con las solicitudes {servicio}")
                             print("")
-                            cuerpos_solicitud = armar_cuerpo_nota_debito_fev1(solicitudes_fev1, client, auth, servicio)
+                            cuerpos_solicitud = armar_cuerpo_nota_debito_fev1(solicitudes_fev1, client, auth, servicio, numero_actividad)
 
                     print("")
                     for cuerpo in cuerpos_solicitud:

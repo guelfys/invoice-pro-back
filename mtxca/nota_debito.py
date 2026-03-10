@@ -158,7 +158,7 @@ def procesar_datos_nota_debito_mtxca(datos, tipo_comprobante, tipo_comprobante_a
     return solicitudes
 
 
-def armar_cuerpo_nota_debito_mtxca(solicitudes, client, auth, servicio):
+def armar_cuerpo_nota_debito_mtxca(solicitudes, client, auth, servicio, numero_actividad=None):
     cuerpos_solicitud = []
 
     ultimo_comprobante = solicitar_ultimo_comprobante(client, auth, servicio)
@@ -292,6 +292,16 @@ def armar_cuerpo_nota_debito_mtxca(solicitudes, client, auth, servicio):
                 } 
             ]
         }
+
+        # Agregar Actividades si están presentes
+        if numero_actividad and numero_actividad != 0:
+            cuerpo["arrayActividades"] = {
+                "actividad": [
+                    {
+                        "codigo": int(numero_actividad)
+                    }
+                ]
+            }
 
         # Añadir el cuerpo de solicitud a la lista
         cuerpos_solicitud.append(cuerpo)

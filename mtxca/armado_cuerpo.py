@@ -101,7 +101,7 @@ def armar_cuerpo_solicitud_mtxca_A(solicitudes, client, auth, servicio, numero_a
 
     return cuerpos_solicitud
 
-def armar_cuerpo_solicitud_mtxca_B(solicitudes, client, auth, servicio, numero_actividad): 
+def armar_cuerpo_solicitud_mtxca_B(solicitudes, client, auth, servicio, numero_actividad=None): 
     cuerpos_solicitud = []
 
     ultimo_comprobante = solicitar_ultimo_comprobante(client, auth, servicio)
@@ -237,8 +237,15 @@ def armar_cuerpo_solicitud_mtxca_B(solicitudes, client, auth, servicio, numero_a
                 "importe": importe_otros_tributos
             }}]
 
+        # Corrección para MTXCA: Estructura de array de actividades
         if numero_actividad and numero_actividad != 0:
-            cuerpo["codigoActividad"] = numero_actividad
+            cuerpo["arrayActividades"] = {
+                "actividad": [
+                    {
+                        "codigo": int(numero_actividad)
+                    }
+                ]
+            }
 
         cuerpos_solicitud.append(cuerpo)
         numero_comprobante += 1

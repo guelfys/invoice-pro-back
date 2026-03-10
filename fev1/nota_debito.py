@@ -67,7 +67,7 @@ def procesar_datos_nota_debito_fev1(datos, tipo_comprobante, punto_venta):
     return solicitudes
 
 
-def armar_cuerpo_nota_debito_fev1(solicitudes, client, auth, servicio):
+def armar_cuerpo_nota_debito_fev1(solicitudes, client, auth, servicio, numero_actividad=None):
     """
     Arma el cuerpo de la solicitud para las notas de débito a enviar al servicio FEV1.
     """
@@ -76,50 +76,91 @@ def armar_cuerpo_nota_debito_fev1(solicitudes, client, auth, servicio):
     # Solicitar el último comprobante autorizado
     ultimo_comprobante = solicitar_ultimo_comprobante(client, auth, servicio)
     numero_comprobante = ultimo_comprobante + 1
-    
+
     for solicitud in solicitudes:
+        imp_neto = solicitud["importe_total"] # Ojo: Asegurate que para A/B esto no deba ser distinto al total
+        imp_iva = solicitud.get("importe_iva", 0)
+        imp_trib = solicitud.get("importe_tributos", 0)
+
         cuerpo = {
-                "FeCabReq": {
-                    "CantReg": 1,
-                    "PtoVta": solicitud["punto_venta"],
-                    "CbteTipo": int(solicitud["tipo_comprobante"])  # Código del tipo de comprobante (Nota de Débito)
-                },
-                "FeDetReq": {
-                    "FECAEDetRequest": [
-                        {
-                            "Concepto": solicitud["concepto"],  # 1: Productos, 2: Servicios, 3: Productos y Servicios
-                            "DocTipo": solicitud["tipo_documento"],  # Tipo de documento del receptor
-                            "DocNro": int(solicitud["numero_documento"]),  # Número de documento del receptor
-                            "CbteFch": solicitud["fecha_emision"],  # Fecha en formato YYYYMMDD
-                            "FchServDesde": solicitud["fecha_servicio_desde"],
-                            "FchServHasta": solicitud["fecha_servicio_hasta"],
-                            "FchVtoPago": solicitud["fecha_vencimiento_pago"],
-                            "ImpTotal": solicitud["importe_total"],  # Importe total de la nota de débito
-                            "ImpNeto": solicitud["importe_total"],  # Importe NETO de la nota de debito
-                            "ImpOpEx": solicitud.get("importe_exento", 0),
-                            "ImpTrib": solicitud.get("importe_tributos", 0),
-                            "ImpIVA": solicitud.get("importe_iva", 0),
-                            "MonId": solicitud["codigo_moneda"],  # Código de moneda
-                            "MonCotiz": solicitud["cotizacion_moneda"],  # Cotización de la moneda
-                            # Asociar con el comprobante original
-                            "CbteDesde": numero_comprobante,  # Número del comprobante desde
-                            "CbteHasta": numero_comprobante,  # Número del comprobante hasta (usualmente igual a `CbteDesde`)
-                            "ImpTotConc": solicitud.get("importe_no_gravado", 0),  # Importe no gravado, puede ser 0
-                            # Asociar con el comprobante original
-                            "CbtesAsoc": {
-                                "CbteAsoc": [
-                                    {
-                                        "Tipo": solicitud["comprobante_original_tipo"],  # Tipo del comprobante original (1: Factura A, 6: Factura B)
-                                        "PtoVta": solicitud["comprobante_original_punto_venta"],  # Punto de venta original
-                                        "Nro": solicitud["comprobante_original_numero"]  # Número del comprobante original
-                                    }
-                                ]
-                            }
+            "FeCabReq": {
+                "CantReg": 1,
+                "PtoVta": solicitud["punto_venta"],
+                "CbteTipo": int(solicitud["tipo_comprobante"])
+            },
+            "FeDetReq": {
+                "FECAEDetRequest": [
+                    {
+                        "Concepto": solicitud["concepto"],
+                        "DocTipo": solicitud["tipo_documento"],
+                        "DocNro": int(solicitud["numero_documento"]),
+                        "CbteFch": solicitud["fecha_emision"],
+                        "FchServDesde": solicitud["fecha_servicio_desde"],
+                        "FchServHasta": solicitud["fecha_servicio_hasta"],
+                        "FchVtoPago": solicitud["fecha_vencimiento_pago"],
+                        "ImpTotal": solicitud["importe_total"],
+                        "ImpNeto": imp_neto,
+                        "ImpOpEx": solicitud.get("importe_exento", 0),
+                        "ImpTrib": imp_trib,
+                        "ImpIVA": imp_iva,
+                        "MonId": solicitud["codigo_moneda"],
+                        "MonCotiz": solicitud["cotizacion_moneda"],
+                        "CbteDesde": numero_comprobante,
+                        "CbteHasta": numero_comprobante,
+                        "ImpTotConc": solicitud.get("importe_no_gravado", 0),
+                        "CbtesAsoc": {
+                            "CbteAsoc": [
+                                {
+                                    "Tipo": solicitud["comprobante_original_tipo"],
+                                    "PtoVta": solicitud["comprobante_original_punto_venta"],
+                                    "Nro": solicitud["comprobante_original_numero"]
+                                }
+                            ]
                         }
-                    ]
-                }
+                    }
+                ]
             }
-        
+        }
+
+        det = cuerpo["FeDetReq"]["FECAEDetRequest"][0]
+
+        # 1. Corrección del Concepto (Igual que en armado_cuerpo.py)
+        if int(solicitud.get("concepto", 0)) == 1:
+            det.pop("FchServDesde", None)
+            det.pop("FchServHasta", None)
+            det.pop("FchVtoPago", None)
+
+        # 2. Agregar Array de IVA si corresponde
+        if imp_iva > 0:
+            det["Iva"] = {
+                "AlicIva": [{
+                    "Id": 5, # Cuidado: el 5 es 21%. Deberías mapearlo dinámicamente si hay varias alícuotas
+                    "BaseImp": imp_neto,
+                    "Importe": imp_iva
+                }]
+            }
+
+        # 3. Agregar Array de Tributos si corresponde
+        if imp_trib > 0:
+            det["Tributos"] = {
+                "Tributo": [{
+                    "Id": solicitud.get("codigo_OTributos", 99), 
+                    "Desc": solicitud.get("descripcion_OTributos", "Otros Tributos"),
+                    "BaseImp": solicitud.get("base_imponible_OTributos", imp_neto),
+                    "Importe": imp_trib
+                }]
+            }
+
+        # 4. Agregar Actividad si fue enviada
+        if numero_actividad and numero_actividad != 0:
+            det["Actividades"] = {
+                "Actividad": [
+                    {
+                        "Id": int(numero_actividad)
+                    }
+                ]
+            }
+
         cuerpos_solicitud.append(cuerpo)
         numero_comprobante += 1
 

@@ -95,8 +95,14 @@ def armar_cuerpo_solicitud_fev1(solicitudes, client, auth, servicio, numero_acti
                 del cuerpo["FeDetReq"]["FECAEDetRequest"][0]["Iva"]
 
         # Agregar el número de actividad si está presente
-        if numero_actividad:
-            cuerpo["FeDetReq"]["FECAEDetRequest"][0]["Actividad"] = numero_actividad
+        if numero_actividad and numero_actividad != 0:
+            cuerpo["FeDetReq"]["FECAEDetRequest"][0]["Actividades"] = {
+                "Actividad": [
+                    {
+                        "Id": int(numero_actividad)
+                    }
+                ]
+            }
 
         cuerpos_solicitud.append(cuerpo)
         numero_comprobante += 1
