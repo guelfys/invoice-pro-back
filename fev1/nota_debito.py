@@ -1,14 +1,26 @@
-
 import pandas as pd
 from backend.config import validar_y_transformar_fecha
 from backend.log import obtener_timestamp
 from solicitudesAFIP.solicitar_ultimo_comprobante import solicitar_ultimo_comprobante
 
 
+def _pick_value(fila, *columnas):
+    for col in columnas:
+        if col in fila.index:
+            value = fila.get(col)
+            if pd.notna(value) and str(value).strip() != "":
+                return value
+    return None
+
+
+def _safe_date(value):
+    if value is None:
+        return None
+    return validar_y_transformar_fecha(value, "FEV1")
+
+
 def procesar_datos_nota_debito_fev1(datos, tipo_comprobante, punto_venta):
-    """
-    Procesa los datos de la nota de débito desde un DataFrame y retorna una lista de solicitudes.
-    """
+    print(f"{obtener_timestamp()} - Inicia con el procesamiento de datos para Nota de Debito {tipo_comprobante}")
     doc_tipo = {
         "CUIT": 80,
         "CUIL": 86,
@@ -37,33 +49,41 @@ def procesar_datos_nota_debito_fev1(datos, tipo_comprobante, punto_venta):
 
     solicitudes = []
     for index, fila in datos.iterrows():
-
-        tipo_fila = fila["Tipo"].lower()
+        tipo_fila = str(fila["Tipo"]).strip().lower()
         print(f"{obtener_timestamp()} - Valida si la celda tiene datos: {tipo_fila}")
 
         if tipo_fila == "comprobante":
+            fecha_emision_raw = _pick_value(fila, "Fecha")
+            periodo_desde_raw = _pick_value(fila, "Periodo Desde", "Fecha servicio desde")
+            periodo_hasta_raw = _pick_value(fila, "Periodo Hasta", "Fecha servicio hasta")
+            fecha_vto_raw = _pick_value(
+                fila,
+                "Fecha vencimiento pago",
+                "Periodo Hasta",
+                "Fecha servicio hasta",
+                "Fecha"
+            )
 
             solicitud = {
-                "tipo_comprobante": tipo_comprobante,  # Código de nota de débito (ej: 2 para Nota de Débito A)
+                "tipo_comprobante": tipo_comprobante,
                 "punto_venta": punto_venta,
-                "fecha_emision": validar_y_transformar_fecha(fila["Fecha"], "FEV1"),
-                "fecha_servicio_desde": validar_y_transformar_fecha(fila["Fecha servicio desde"], "FEV1"),
-                "fecha_servicio_hasta": validar_y_transformar_fecha(fila["Fecha servicio hasta"], "FEV1"),
-                "fecha_vencimiento_pago": validar_y_transformar_fecha(fila["Fecha vencimiento pago"], "FEV1"),
+                "fecha_emision": _safe_date(fecha_emision_raw),
+                "fecha_servicio_desde": _safe_date(periodo_desde_raw),
+                "fecha_servicio_hasta": _safe_date(periodo_hasta_raw),
+                "fecha_vencimiento_pago": _safe_date(fecha_vto_raw),
                 "tipo_documento": int(doc_tipo.get(fila["Tipo Doc"], 99)),
                 "numero_documento": fila["Documento"],
                 "importe_total": fila["Importe Total"],
                 "codigo_moneda": "PES",
                 "cotizacion_moneda": 1,
-                "concepto": fila["Concepto"],  # 1 para productos, 2 para servicios
+                "concepto": fila["Concepto"],
                 "motivo_nota_debito": fila.get("Motivo Nota"),
-                # Agregar referencia al comprobante original
-                "comprobante_original_tipo": tipo_comprobante,  # Tipo del comprobante original
-                "comprobante_original_punto_venta": punto_venta,  # Punto de venta del comprobante original
-                "comprobante_original_numero": fila.get("Número Comprobante Original")  # Número del comprobante original
+                "comprobante_original_tipo": tipo_comprobante,
+                "comprobante_original_punto_venta": punto_venta,
+                "comprobante_original_numero": fila.get("Número Comprobante Original")
             }
             solicitudes.append(solicitud)
-    
+
     return solicitudes
 
 
@@ -72,13 +92,12 @@ def armar_cuerpo_nota_debito_fev1(solicitudes, client, auth, servicio, numero_ac
     Arma el cuerpo de la solicitud para las notas de débito a enviar al servicio FEV1.
     """
     cuerpos_solicitud = []
-    
-    # Solicitar el último comprobante autorizado
+
     ultimo_comprobante = solicitar_ultimo_comprobante(client, auth, servicio)
     numero_comprobante = ultimo_comprobante + 1
 
     for solicitud in solicitudes:
-        imp_neto = solicitud["importe_total"] # Ojo: Asegurate que para A/B esto no deba ser distinto al total
+        imp_neto = solicitud["importe_total"]
         imp_iva = solicitud.get("importe_iva", 0)
         imp_trib = solicitud.get("importe_tributos", 0)
 
@@ -124,34 +143,30 @@ def armar_cuerpo_nota_debito_fev1(solicitudes, client, auth, servicio, numero_ac
 
         det = cuerpo["FeDetReq"]["FECAEDetRequest"][0]
 
-        # 1. Corrección del Concepto (Igual que en armado_cuerpo.py)
         if int(solicitud.get("concepto", 0)) == 1:
             det.pop("FchServDesde", None)
             det.pop("FchServHasta", None)
             det.pop("FchVtoPago", None)
 
-        # 2. Agregar Array de IVA si corresponde
         if imp_iva > 0:
             det["Iva"] = {
                 "AlicIva": [{
-                    "Id": 5, # Cuidado: el 5 es 21%. Deberías mapearlo dinámicamente si hay varias alícuotas
+                    "Id": 5,
                     "BaseImp": imp_neto,
                     "Importe": imp_iva
                 }]
             }
 
-        # 3. Agregar Array de Tributos si corresponde
         if imp_trib > 0:
             det["Tributos"] = {
                 "Tributo": [{
-                    "Id": solicitud.get("codigo_OTributos", 99), 
+                    "Id": solicitud.get("codigo_OTributos", 99),
                     "Desc": solicitud.get("descripcion_OTributos", "Otros Tributos"),
                     "BaseImp": solicitud.get("base_imponible_OTributos", imp_neto),
                     "Importe": imp_trib
                 }]
             }
 
-        # 4. Agregar Actividad si fue enviada
         if numero_actividad and numero_actividad != 0:
             det["Actividades"] = {
                 "Actividad": [

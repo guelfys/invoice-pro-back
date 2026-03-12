@@ -1,14 +1,28 @@
-
-# mtxca/nota_credito.py
 from backend.log import escribir_log, obtener_timestamp
 import pandas as pd
 from backend.config import validar_y_transformar_fecha
 from solicitudesAFIP.solicitar_ultimo_comprobante import solicitar_ultimo_comprobante
 
+
+def _pick_value(fila, *columnas):
+    for col in columnas:
+        if col in fila.index:
+            value = fila.get(col)
+            if pd.notna(value) and str(value).strip() != "":
+                return value
+    return None
+
+
+def _safe_date(value):
+    if value is None:
+        return None
+    return validar_y_transformar_fecha(value, "MTXCA")
+
+
 def procesar_datos_nota_credito_mtxca(datos, tipo_comprobante, tipo_comprobante_asociado, punto_venta):
 
     escribir_log(f"{obtener_timestamp()} - Iniciando el procesamiento de datos para MTXCA.")
-    
+
     if not isinstance(datos, pd.DataFrame):
         escribir_log(f"{obtener_timestamp()} - Error: Se esperaba un DataFrame, pero se recibió un objeto de tipo {type(datos)}")
         return []
@@ -81,23 +95,33 @@ def procesar_datos_nota_credito_mtxca(datos, tipo_comprobante, tipo_comprobante_
     }
 
     for index, fila in datos.iterrows():
-        
-        tipo_fila = fila["Tipo"].lower()
+        tipo_fila = str(fila["Tipo"]).strip().lower()
 
         if tipo_fila == "comprobante":
-            
             contador_producto = 1
+
             if comprobante_actual:
                 comprobante_actual["items"] = items
                 solicitudes.append(comprobante_actual)
-            
+
+            fecha_emision_raw = _pick_value(fila, "Fecha")
+            periodo_desde_raw = _pick_value(fila, "Periodo Desde", "Fecha servicio desde")
+            periodo_hasta_raw = _pick_value(fila, "Periodo Hasta", "Fecha servicio hasta")
+            fecha_vto_raw = _pick_value(
+                fila,
+                "Fecha vencimiento pago",
+                "Periodo Hasta",
+                "Fecha servicio hasta",
+                "Fecha"
+            )
+
             comprobante_actual = {
-                "tipo_comprobante": tipo_comprobante,  # Código de nota de débito
+                "tipo_comprobante": tipo_comprobante,
                 "punto_venta": punto_venta,
-                "fecha_emision": validar_y_transformar_fecha(fila["Fecha"], "MTXCA"),
-                "fecha_servicio_desde": fila["Fecha servicio desde"],
-                "fecha_servicio_hasta": fila["Fecha servicio hasta"],
-                "fecha_vencimiento_pago": fila["Fecha vencimiento pago"],
+                "fecha_emision": _safe_date(fecha_emision_raw),
+                "fecha_servicio_desde": _safe_date(periodo_desde_raw),
+                "fecha_servicio_hasta": _safe_date(periodo_hasta_raw),
+                "fecha_vencimiento_pago": _safe_date(fecha_vto_raw),
                 "tipo_documento": int(doc_tipo.get(fila["Tipo Doc"], 99)),
                 "numero_documento": fila["Documento"],
                 "importe_total": float(fila.iloc[17] if pd.notna(fila.iloc[17]) else 0.0),
@@ -110,11 +134,10 @@ def procesar_datos_nota_credito_mtxca(datos, tipo_comprobante, tipo_comprobante_
                 "descripcion_OTributos": fila["Descripcion Otros Tributos"],
                 "base_imponible_OTributos": fila["Base Imponible Otros Tributos"],
                 "concepto": fila["Concepto"],
-                "motivo_nota": fila.get("Motivo Nota"),  # Asegúrate de que este campo esté en el Excel
-                # Agregar referencia al comprobante original
-                "comprobante_original_tipo": tipo_comprobante_asociado,  # Tipo del comprobante original
-                "comprobante_original_punto_venta": fila.get("Punto Venta C. Original"),  # Pun/to de venta del comprobante original
-                "comprobante_original_numero": fila.get("Número Comprobante Original"),  # Número del comprobante original
+                "motivo_nota": fila.get("Motivo Nota"),
+                "comprobante_original_tipo": tipo_comprobante_asociado,
+                "comprobante_original_punto_venta": fila.get("Punto Venta C. Original"),
+                "comprobante_original_numero": fila.get("Número Comprobante Original"),
                 "iva_receptor": int(iva_receptor.get(str(fila.iloc[3]).lower(), 5))
             }
 
@@ -136,7 +159,6 @@ def procesar_datos_nota_credito_mtxca(datos, tipo_comprobante, tipo_comprobante_
             contador_producto += 1
 
         elif tipo_fila == "item":
-
             print(f"{obtener_timestamp()} - contador del producto: {contador_producto}")
             items.append({
                 "unidadMtx": int(fila["unidadMtx"]),
@@ -155,7 +177,7 @@ def procesar_datos_nota_credito_mtxca(datos, tipo_comprobante, tipo_comprobante_
     if comprobante_actual:
         comprobante_actual["items"] = items
         solicitudes.append(comprobante_actual)
-    
+
     escribir_log(f"{obtener_timestamp()} - Procesamiento de datos MTXCA finalizado. Total de solicitudes generadas: {len(solicitudes)}.")
     print(f"{obtener_timestamp()} - Procesamiento de datos MTXCA finalizado. Total de solicitudes generadas: {len(solicitudes)}.")
 
@@ -169,9 +191,8 @@ def armar_cuerpo_nota_credito_mtxca(solicitudes, client, auth, servicio, numero_
     numero_comprobante = ultimo_comprobante + 1
 
     for solicitud in solicitudes:
-        
         print("Inicia con la solicitud")
-        # Calcular importes
+
         importe_no_gravado = sum(item['importeItem'] for item in solicitud['items'] if item['codigoCondicionIVA'] == "1")
         importe_exento = sum(item['importeItem'] for item in solicitud['items'] if item['codigoCondicionIVA'] == "2")
         importe_gravado = sum(item['importeItem'] for item in solicitud['items'] if item['codigoCondicionIVA'] in ["3", "4", "5", "6", "8", "9"])
@@ -185,43 +206,39 @@ def armar_cuerpo_nota_credito_mtxca(solicitudes, client, auth, servicio, numero_
         else:
             importe_total = solicitud["importe_total"]
 
-        
         if solicitud["concepto"] == 2 or solicitud["concepto"] == "2" or solicitud["concepto"] == 3 or solicitud["concepto"] == "3":
-            # Construir cuerpo
             cuerpo = {
-                    "codigoConcepto": solicitud["concepto"],
-                    "codigoTipoComprobante": solicitud["tipo_comprobante"],
-                    "numeroPuntoVenta": solicitud["punto_venta"],
-                    "numeroComprobante": numero_comprobante,
-                    "fechaEmision": solicitud["fecha_emision"],
-                    "fechaServicioDesde": solicitud["fecha_servicio_desde"],
-                    "fechaServicioHasta": solicitud["fecha_servicio_hasta"],
-                    "fechaVencimientoPago": solicitud["fecha_vencimiento_pago"],
-                    "codigoTipoDocumento": solicitud["tipo_documento"],
-                    "numeroDocumento": solicitud["numero_documento"],
-                    "importeSubtotal": importe_subtotal,
-                    "importeTotal": importe_total,
-                    "codigoMoneda": "PES",
-                    "cotizacionMoneda": 1,
-                    "condicionIVAReceptor": solicitud["iva_receptor"]
-                }
-
+                "codigoConcepto": solicitud["concepto"],
+                "codigoTipoComprobante": solicitud["tipo_comprobante"],
+                "numeroPuntoVenta": solicitud["punto_venta"],
+                "numeroComprobante": numero_comprobante,
+                "fechaEmision": solicitud["fecha_emision"],
+                "fechaServicioDesde": solicitud["fecha_servicio_desde"],
+                "fechaServicioHasta": solicitud["fecha_servicio_hasta"],
+                "fechaVencimientoPago": solicitud["fecha_vencimiento_pago"],
+                "codigoTipoDocumento": solicitud["tipo_documento"],
+                "numeroDocumento": solicitud["numero_documento"],
+                "importeSubtotal": importe_subtotal,
+                "importeTotal": importe_total,
+                "codigoMoneda": "PES",
+                "cotizacionMoneda": 1,
+                "condicionIVAReceptor": solicitud["iva_receptor"]
+            }
         else:
-            # Construir cuerpo
             cuerpo = {
-                    "codigoConcepto": solicitud["concepto"],
-                    "codigoTipoComprobante": solicitud["tipo_comprobante"],
-                    "numeroPuntoVenta": solicitud["punto_venta"],
-                    "numeroComprobante": solicitud["comprobante_original_numero"],
-                    "fechaEmision": solicitud["fecha_emision"],
-                    "codigoTipoDocumento": solicitud["tipo_documento"],
-                    "numeroDocumento": solicitud["numero_documento"],
-                    "importeSubtotal": importe_subtotal,
-                    "importeTotal": importe_total,
-                    "codigoMoneda": "PES",
-                    "cotizacionMoneda": 1,
-                    "condicionIVAReceptor": solicitud["iva_receptor"]
-                }
+                "codigoConcepto": solicitud["concepto"],
+                "codigoTipoComprobante": solicitud["tipo_comprobante"],
+                "numeroPuntoVenta": solicitud["punto_venta"],
+                "numeroComprobante": solicitud["comprobante_original_numero"],
+                "fechaEmision": solicitud["fecha_emision"],
+                "codigoTipoDocumento": solicitud["tipo_documento"],
+                "numeroDocumento": solicitud["numero_documento"],
+                "importeSubtotal": importe_subtotal,
+                "importeTotal": importe_total,
+                "codigoMoneda": "PES",
+                "cotizacionMoneda": 1,
+                "condicionIVAReceptor": solicitud["iva_receptor"]
+            }
 
         items = []
         array_items = []
@@ -254,25 +271,21 @@ def armar_cuerpo_nota_credito_mtxca(solicitudes, client, auth, servicio, numero_
                     "codigoCondicionIVA": item["codigoCondicionIVA"]
                 }
             items.append(item_data)
-        
+
         array_items.append({"item": items})
+        cuerpo["arrayItems"] = array_items
 
-        cuerpo["arrayItems"] = array_items                          
-
-        # Filtrar los ítems que tienen los códigos de IVA esperados
         items_iva = [item for item in solicitud['items'] if item.get("codigoCondicionIVA") in ['4', '5', '6', '8', '9']]
 
         if importe_gravado >= 0:
-            cuerpo["importeGravado"] = importe_gravado          
-
+            cuerpo["importeGravado"] = importe_gravado
         elif importe_exento > 0:
             cuerpo["importeExento"] = importe_exento
 
-        elif importe_iva > 0:
+        if importe_iva > 0:
             cuerpo["importeGravado"] = importe_gravado
             cuerpo["importeNoGravado"] = importe_no_gravado
             cuerpo["importeExento"] = importe_exento
-            
             cuerpo["arraySubtotalesIVA"] = {
                 "subtotalIVA": [{
                     "codigo": item["codigoCondicionIVA"],
@@ -280,7 +293,7 @@ def armar_cuerpo_nota_credito_mtxca(solicitudes, client, auth, servicio, numero_
                 } for item in items_iva]
             }
 
-        elif importe_otros_tributos > 0:
+        if importe_otros_tributos > 0:
             cuerpo["importeOtrosTributos"] = importe_otros_tributos
             cuerpo["arrayOtrosTributos"] = [{"tributo": {
                 "codigo": solicitud["codigo_OTributos"],
@@ -288,18 +301,17 @@ def armar_cuerpo_nota_credito_mtxca(solicitudes, client, auth, servicio, numero_
                 "baseImponible": solicitud["base_imponible_OTributos"],
                 "importe": importe_otros_tributos
             }}]
-        
+
         cuerpo["arrayComprobantesAsociados"] = {
             "comprobanteAsociado": [
                 {
-                    "codigoTipoComprobante": solicitud["comprobante_original_tipo"],  # Tipo del comprobante original
-                    "numeroPuntoVenta": solicitud["comprobante_original_punto_venta"],    # Punto de venta original
-                    "numeroComprobante": solicitud["comprobante_original_numero"]       # Número del comprobante original
-                } 
+                    "codigoTipoComprobante": solicitud["comprobante_original_tipo"],
+                    "numeroPuntoVenta": solicitud["comprobante_original_punto_venta"],
+                    "numeroComprobante": solicitud["comprobante_original_numero"]
+                }
             ]
         }
-        
-        # Agregar Actividades si están presentes
+
         if numero_actividad and numero_actividad != 0:
             cuerpo["arrayActividades"] = {
                 "actividad": [
@@ -309,7 +321,6 @@ def armar_cuerpo_nota_credito_mtxca(solicitudes, client, auth, servicio, numero_
                 ]
             }
 
-        # Añadir el cuerpo de solicitud a la lista
         cuerpos_solicitud.append(cuerpo)
         numero_comprobante += 1
 

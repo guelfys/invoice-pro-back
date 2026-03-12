@@ -3,10 +3,11 @@
 #* [               PROCESO PARA FACTURACIÓN ELECTRONICA                  ]
 #* Realizado por FysTech Group
 #* Desarrollador: Matias Nicolas Franco
-#* Versión: 4.1
+#* Versión: 4.2
 #* Codigo Modularizado
 #* Ultima Update: 10/03/2026 En Proceso
 #? PASO AGREGADO FALTANTE: Modularizar el codigo del main, ya que esta demasiado largo
+#? El codigo tiene demasiado márgen de mejora, exageradamente mucho se puede mejorar, pero lamentablemente por los tiempos y prioridades se tuvieron que hacer muchas cosas a las apuradas.
 #* ----------------------------------------- [IMPORTS] ----------------------------------------- *# 
 
 # * IMPORTS MODULOS
