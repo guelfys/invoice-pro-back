@@ -1,4 +1,3 @@
-
 from backend.log import escribir_log, obtener_timestamp
 from backend.config import validar_y_transformar_fecha
 import pandas as pd
@@ -15,7 +14,70 @@ def to_float(v):
         return 0.0
     if isinstance(v, str) and v.strip() == "":
         return 0.0
-    return float(v)
+    if pd.isna(v):
+        return 0.0
+    try:
+        return float(v)
+    except Exception:
+        return 0.0
+
+
+def _normalize_key(value):
+    if value is None:
+        return ""
+    return (
+        str(value)
+        .strip()
+        .lower()
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
+
+
+def _build_column_lookup(df: pd.DataFrame):
+    return {_normalize_key(col): col for col in df.columns if col is not None}
+
+
+def _get_cell_value(row, column_lookup, *possible_names):
+    for name in possible_names:
+        real_col = column_lookup.get(_normalize_key(name))
+        if real_col is not None:
+            return row.get(real_col)
+    return None
+
+
+def _get_text(row, column_lookup, *possible_names):
+    value = _get_cell_value(row, column_lookup, *possible_names)
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def _get_int(row, column_lookup, *possible_names, default=0):
+    value = _get_cell_value(row, column_lookup, *possible_names)
+    if value is None or pd.isna(value) or str(value).strip() == "":
+        return default
+    try:
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _get_float(row, column_lookup, *possible_names, default=0.0):
+    value = _get_cell_value(row, column_lookup, *possible_names)
+    return to_float(value) if value is not None else default
+
+
+def _safe_date(value):
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    try:
+        return str(validar_y_transformar_fecha(value, "FEV1"))
+    except Exception:
+        return None
+
 
 def procesar_datos_fev1(datos, tipo_comprobante, punto_venta):
     escribir_log(f"{obtener_timestamp()} - Iniciando el procesamiento de datos para FEV1.")
@@ -30,83 +92,157 @@ def procesar_datos_fev1(datos, tipo_comprobante, punto_venta):
     total_iva = 0.0
     total_neto = 0.0
 
+    column_lookup = _build_column_lookup(datos)
+
     doc_tipo = {
-        "CUIT": 80,
-        "CUIL": 86,
-        "CDI": 87,
-        "CI Extranjera": 91,
-        "Pasaporte": 94,
-        "DNI": 96,
-        "D.N.I": 96,
-        "Otro": 99,
-        "IVA Responsable inscripto": 1,
-        "IVA Responsable no inscripto": 2,
-        "IVA No responsable": 3,
-        "IVA Sujeto exento": 4,
-        "Consumidor final": 5,
-        "Responsable monotributo": 6,
-        "Sujeto no categorizado": 7,
-        "Proveedor del exterior": 8,
-        "Cliente del exterior": 9,
-        "IVA Liberado - Ley 19.640": 10,
-        "IVA Responsable inscripto - Agente de percepción": 11,
-        "Pequeño contribuyente eventual": 12,
-        "Monotributista social": 13,
-        "Pequeño contribuyente eventual social": 14,
-        "IVA No alcanzado": 15
+        "cuit": 80,
+        "cuil": 86,
+        "cdi": 87,
+        "ci extranjera": 91,
+        "pasaporte": 94,
+        "dni": 96,
+        "d.n.i": 96,
+        "otro": 99,
+        "iva responsable inscripto": 1,
+        "iva responsable no inscripto": 2,
+        "iva no responsable": 3,
+        "iva sujeto exento": 4,
+        "consumidor final": 5,
+        "responsable monotributo": 6,
+        "sujeto no categorizado": 7,
+        "proveedor del exterior": 8,
+        "cliente del exterior": 9,
+        "iva liberado - ley 19.640": 10,
+        "iva responsable inscripto - agente de percepción": 11,
+        "pequeño contribuyente eventual": 12,
+        "monotributista social": 13,
+        "pequeño contribuyente eventual social": 14,
+        "iva no alcanzado": 15
     }
 
     for index, fila in datos.iterrows():
-        tipo_fila = fila.iloc[0].strip().lower()
+        tipo_fila = _get_text(fila, column_lookup, "Tipo Dato", "Tipo").lower()
+
+        if not tipo_fila:
+            continue
 
         if tipo_fila == "comprobante":
             escribir_log(f"{obtener_timestamp()} - Procesando comprobante en la fila {index}.")
 
             if comprobante_actual:
-                # Finaliza el procesamiento del comprobante actual
                 comprobante_actual["importe_total"] = total_importe
                 comprobante_actual["ImpIVA"] = total_iva
                 comprobante_actual["ImpNeto"] = total_neto
                 solicitudes.append(comprobante_actual)
 
-            # Reinicia los acumuladores para el nuevo comprobante
-            total_importe = to_float(fila.iloc[12])
-            total_iva = to_float(fila.iloc[18])
-            total_neto = to_float(fila.iloc[12])
+            total_importe = _get_float(fila, column_lookup, "Total")
+            total_iva = _get_float(fila, column_lookup, "Importe IVA")
+            total_neto = _get_float(fila, column_lookup, "Total")
+
+            concepto = _get_int(fila, column_lookup, "Concepto", default=1)
+
+            fecha_emision = _safe_date(_get_cell_value(fila, column_lookup, "Fecha"))
+
+            # Acepta ambas variantes de columnas
+            fecha_servicio_desde = _safe_date(
+                _get_cell_value(
+                    fila,
+                    column_lookup,
+                    "Periodo Desde",
+                    "Fecha servicio desde"
+                )
+            )
+
+            fecha_servicio_hasta = _safe_date(
+                _get_cell_value(
+                    fila,
+                    column_lookup,
+                    "Periodo Hasta",
+                    "Fecha servicio hasta"
+                )
+            )
+
+            fecha_vencimiento_pago_excel = _safe_date(
+                _get_cell_value(
+                    fila,
+                    column_lookup,
+                    "Fecha vencimiento pago"
+                )
+            )
+
+            # Normalización por concepto
+            if concepto == 1:
+                # Productos: no se informan fechas de servicio ni vencimiento
+                fecha_servicio_desde = None
+                fecha_servicio_hasta = None
+                fecha_vencimiento_pago = None
+
+            elif concepto in (2, 3):
+                # Servicios / Productos y Servicios:
+                # si faltan las fechas, usar fecha de emisión para evitar rechazo
+                if fecha_servicio_desde is None:
+                    fecha_servicio_desde = fecha_emision
+
+                if fecha_servicio_hasta is None:
+                    fecha_servicio_hasta = fecha_emision
+
+                fecha_vencimiento_pago = (
+                    fecha_vencimiento_pago_excel
+                    if fecha_vencimiento_pago_excel is not None
+                    else fecha_emision
+                )
+
+            else:
+                # fallback defensivo
+                fecha_servicio_desde = None
+                fecha_servicio_hasta = None
+                fecha_vencimiento_pago = None
+
+            tipo_doc_texto = _get_text(fila, column_lookup, "Tipo Doc")
+            tipo_documento = int(doc_tipo.get(tipo_doc_texto.lower(), 99))
 
             comprobante_actual = {
-                "Concepto": int(fila.iloc[21]),
+                "Concepto": concepto,
                 "tipo_comprobante": tipo_comprobante,
                 "punto_venta": punto_venta,
-                "fecha_emision": str(validar_y_transformar_fecha(fila.iloc[1], "FEV1")),
-                "fecha_vencimiento_pago": str(validar_y_transformar_fecha(fila.iloc[1], "FEV1")),
-                "fecha_servicio_desde": str(validar_y_transformar_fecha(fila.iloc[2], "FEV1")),
-                "fecha_servicio_hasta": str(validar_y_transformar_fecha(fila.iloc[3], "FEV1")),
-                "tipo_documento": int(doc_tipo.get(fila.iloc[5], 99)),
-                "numero_documento": int(0 if pd.isna(fila.iloc[7]) else fila.iloc[7]),
+                "fecha_emision": fecha_emision,
+                "fecha_vencimiento_pago": fecha_vencimiento_pago,
+                "fecha_servicio_desde": fecha_servicio_desde,
+                "fecha_servicio_hasta": fecha_servicio_hasta,
+                "tipo_documento": tipo_documento,
+                "numero_documento": _get_int(fila, column_lookup, "Documento", default=0),
                 "ID_Moneda": "PES",
                 "moneda_cotizacion": 1,
                 "importe_total": 0.0,
                 "ImpIVA": 0.0,
-                "ImpTotConc": float(0 if to_float(pd.isna(fila.iloc[16])) else to_float(fila.iloc[16])),
+                "ImpTotConc": _get_float(fila, column_lookup, "Importe Bonificación"),
                 "ImpNeto": 0.0,
-                "ImpOpEx": float(0 if to_float(pd.isna(fila.iloc[17])) else to_float(fila.iloc[17])),
-                "ImpTrib": float(0 if to_float(pd.isna(fila.iloc[19])) else to_float(fila.iloc[19])),
-                "importe_bonificacion": fila.iloc[16],
-                "codigo_OTributos": fila.iloc[22],
-                "descripcion_OTributos": fila.iloc[23],
-                "base_imponible_OTributos": fila.iloc[24],
+                "ImpOpEx": _get_float(fila, column_lookup, "Importe Op Ex"),
+                "ImpTrib": _get_float(fila, column_lookup, "Importe Tributos"),
+                "importe_bonificacion": _get_float(fila, column_lookup, "Importe Bonificación"),
+                "codigo_OTributos": _get_cell_value(fila, column_lookup, "Codigo Otros Tributos"),
+                "descripcion_OTributos": _get_cell_value(
+                    fila,
+                    column_lookup,
+                    "Descripión Otros Tributos",
+                    "Descripción Otros Tributos"
+                ),
+                "base_imponible_OTributos": _get_float(fila, column_lookup, "Base Imponible Otros Tributos"),
                 "Iva": []
             }
 
         elif tipo_fila == "item":
             escribir_log(f"{obtener_timestamp()} - Procesando ítem en la fila {index}.")
-            importeItem = float(0 if pd.isna(fila.iloc[12]) else fila.iloc[12])
-            iva_item = float(0 if pd.isna(fila.iloc[18]) else fila.iloc[18])
 
-            total_importe += importeItem
+            if comprobante_actual is None:
+                continue
+
+            importe_item = _get_float(fila, column_lookup, "Total")
+            iva_item = _get_float(fila, column_lookup, "Importe IVA")
+
+            total_importe += importe_item
             total_iva += iva_item
-            total_neto += importeItem
+            total_neto += importe_item
 
             if tipo_comprobante == 1 or tipo_comprobante == 6:
                 comprobante_actual["ImpNeto"] = total_neto
@@ -120,7 +256,6 @@ def procesar_datos_fev1(datos, tipo_comprobante, punto_venta):
                 })
 
     if comprobante_actual:
-        # Finaliza el último comprobante
         comprobante_actual["importe_total"] = total_importe
         comprobante_actual["ImpIVA"] = total_iva
         comprobante_actual["ImpNeto"] = total_neto

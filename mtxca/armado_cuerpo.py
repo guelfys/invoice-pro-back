@@ -2,6 +2,23 @@
 from solicitudesAFIP.solicitar_ultimo_comprobante import solicitar_ultimo_comprobante
 
 
+def _normalizar_fechas_mtxca(cuerpo, solicitud):
+    concepto = int(solicitud.get("codigoConcepto", 0) or 0)
+
+    if concepto == 1:
+        cuerpo.pop("fechaServicioDesde", None)
+        cuerpo.pop("fechaServicioHasta", None)
+        cuerpo.pop("fechaVencimientoPago", None)
+        return
+
+    if not solicitud.get("fecha_servicio_desde"):
+        cuerpo.pop("fechaServicioDesde", None)
+    if not solicitud.get("fecha_servicio_hasta"):
+        cuerpo.pop("fechaServicioHasta", None)
+    if not solicitud.get("fecha_vencimiento_pago"):
+        cuerpo.pop("fechaVencimientoPago", None)
+
+
 def armar_cuerpo_solicitud_mtxca_A(solicitudes, client, auth, servicio, numero_actividad):
     cuerpos_solicitud = []
 
@@ -29,9 +46,9 @@ def armar_cuerpo_solicitud_mtxca_A(solicitudes, client, auth, servicio, numero_a
             "numeroPuntoVenta": solicitud["punto_venta"],
             "numeroComprobante": numero_comprobante,
             "fechaEmision": solicitud["fecha_emision"],
-            "fechaServicioDesde": solicitud["fecha_servicio_desde"],
-            "fechaServicioHasta": solicitud["fecha_servicio_hasta"],
-            "fechaVencimientoPago": solicitud["fecha_vencimiento_pago"],
+            "fechaServicioDesde": solicitud.get("fecha_servicio_desde"),
+            "fechaServicioHasta": solicitud.get("fecha_servicio_hasta"),
+            "fechaVencimientoPago": solicitud.get("fecha_vencimiento_pago"),
             "codigoTipoDocumento": solicitud["tipo_documento"],
             "numeroDocumento": solicitud["numero_documento"],
             "importeSubtotal": importe_subtotal,
@@ -39,7 +56,9 @@ def armar_cuerpo_solicitud_mtxca_A(solicitudes, client, auth, servicio, numero_a
             "codigoMoneda": "PES",
             "cotizacionMoneda": 1,
             "condicionIVAReceptor": solicitud["iva_receptor"],
-                    }
+        }
+
+        _normalizar_fechas_mtxca(cuerpo, solicitud)
 
         items = []
         array_items = []
@@ -58,7 +77,7 @@ def armar_cuerpo_solicitud_mtxca_A(solicitudes, client, auth, servicio, numero_a
                 "importeIVA": item.get("importeIVA", 0.0)
             }
             items.append(item_data)
-        
+
         array_items.append({"item": items})
 
         cuerpo["arrayItems"] = array_items
@@ -70,7 +89,7 @@ def armar_cuerpo_solicitud_mtxca_A(solicitudes, client, auth, servicio, numero_a
             cuerpo["importeGravado"] = importe_gravado
             cuerpo["importeNoGravado"] = importe_no_gravado
             cuerpo["importeExento"] = importe_exento
-            
+
             cuerpo["arraySubtotalesIVA"] = {
                 "subtotalIVA": [{
                     "codigo": item["codigoCondicionIVA"],
@@ -141,9 +160,9 @@ def armar_cuerpo_solicitud_mtxca_B(solicitudes, client, auth, servicio, numero_a
             "numeroPuntoVenta": solicitud["punto_venta"],
             "numeroComprobante": numero_comprobante,
             "fechaEmision": solicitud["fecha_emision"],
-            "fechaServicioDesde": solicitud["fecha_servicio_desde"],
-            "fechaServicioHasta": solicitud["fecha_servicio_hasta"],
-            "fechaVencimientoPago": solicitud["fecha_vencimiento_pago"],
+            "fechaServicioDesde": solicitud.get("fecha_servicio_desde"),
+            "fechaServicioHasta": solicitud.get("fecha_servicio_hasta"),
+            "fechaVencimientoPago": solicitud.get("fecha_vencimiento_pago"),
             "codigoTipoDocumento": solicitud["tipo_documento"],
             "numeroDocumento": solicitud["numero_documento"],
             "importeSubtotal": importe_subtotal,
@@ -157,14 +176,15 @@ def armar_cuerpo_solicitud_mtxca_B(solicitudes, client, auth, servicio, numero_a
                 "codigo": idx + 1,
                 "descripcion": item["descripcion"],
                 "cantidad": item["cantidad"],
-                "codigoUnidadMedida": 6,  # Unidades, código AFIP
+                "codigoUnidadMedida": 6,
                 "precioUnitario": item["precioUnitario"],
-                "importeItem": item["importeItem"],        # SI ES FACTURA CON IVA = SE SUMA "+ item["importeIVA"]"
+                "importeItem": item["importeItem"],
                 "importeBonificacion": solicitud["importe_bonificacion"],
                 "codigoCondicionIVA": item["codigoCondicionIVA"]                      
-                # SI HAY IVA MAYOR A 0, SE AGREGA ESTE PARAMETRO <"importeIVA": item["importeIVA"]>
             }} for idx, item in enumerate(solicitud["items"])]
         }
+
+        _normalizar_fechas_mtxca(cuerpo, solicitud)
 
         items = []
         array_items = []
@@ -199,15 +219,13 @@ def armar_cuerpo_solicitud_mtxca_B(solicitudes, client, auth, servicio, numero_a
                 }
 
             items.append(item_data)
-        
+
         array_items.append({"item": items})
 
         cuerpo["arrayItems"] = array_items
 
-        # Filtrar los ítems que tienen los códigos de IVA esperados
         items_iva = [item for item in solicitud['items'] if item.get("codigoCondicionIVA") in ['4', '5', '6', '8', '9']]
 
-        # Si el importe de IVA es mayor a 0 y hay al menos un ítem con los códigos de IVA esperados
         if importe_iva > 0 and items_iva:
             cuerpo["arraySubtotalesIVA"] = {
                 "subtotalIVA": [{
@@ -217,13 +235,13 @@ def armar_cuerpo_solicitud_mtxca_B(solicitudes, client, auth, servicio, numero_a
             }
 
             cuerpo["importeGravado"] = importe_gravado
-        
+
         if importe_gravado > 0:
             cuerpo["importeGravado"] = importe_gravado
 
         if importe_no_gravado > 0:
             cuerpo["importeNoGravado"] = importe_no_gravado
-        
+
         if importe_exento > 0:
             cuerpo["importeExento"] = importe_exento
 
@@ -231,13 +249,12 @@ def armar_cuerpo_solicitud_mtxca_B(solicitudes, client, auth, servicio, numero_a
             cuerpo["importeOtrosTributos"] = importe_otros_tributos
 
             cuerpo["arrayOtrosTributos"] = [{"tributo": {
-                "codigo": solicitud["codigo_OTributos"],  # Ejemplo de código de tributo, ajusta según sea necesario
+                "codigo": solicitud["codigo_OTributos"],
                 "descripcion": solicitud["descripcion_OTributos"],
-                "baseImponible": solicitud["base_imponible_OTributos"],  # Ajusta según sea necesario
+                "baseImponible": solicitud["base_imponible_OTributos"],
                 "importe": importe_otros_tributos
             }}]
 
-        # Corrección para MTXCA: Estructura de array de actividades
         if numero_actividad and numero_actividad != 0:
             cuerpo["arrayActividades"] = {
                 "actividad": [

@@ -79,13 +79,368 @@ def _set_num(ws, cell_ref, value, fmt="#,##0.00"):
     c.number_format = fmt
 
 
+
+def _normalize_key(value):
+    if value is None:
+        return ""
+    return (
+        str(value)
+        .strip()
+        .lower()
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
+
+def _row_lookup(row):
+    try:
+        idx = row.index
+    except Exception:
+        idx = []
+    return {_normalize_key(col): col for col in idx if col is not None}
+
+def _get_by_index(row, idx, default=None):
+    try:
+        if idx is None:
+            return default
+        value = row.iloc[idx]
+        if pd.isna(value):
+            return default
+        return value
+    except Exception:
+        return default
+
+def _get_row_value(row, *possible_names, default=None):
+    lookup = _row_lookup(row)
+    for name in possible_names:
+        real_col = lookup.get(_normalize_key(name))
+        if real_col is not None:
+            try:
+                value = row.get(real_col)
+            except Exception:
+                value = None
+            if value is not None and not pd.isna(value):
+                if not (isinstance(value, str) and value.strip() == ""):
+                    return value
+    return default
+
+def _get_text(row, *possible_names, default=""):
+    value = _get_row_value(row, *possible_names, default=None)
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    return str(value).strip()
+
+def _safe_text(value, default=""):
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    s = str(value).strip()
+    return s if s else default
+
+def _coerce_date_for_excel(value):
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+
+    if isinstance(value, _dt.datetime):
+        return value
+
+    if isinstance(value, _dt.date):
+        return _dt.datetime.combine(value, _dt.time())
+
+    if isinstance(value, (int, float)):
+        try:
+            fv = float(value)
+            if 20000101 <= fv <= 29991231 and float(value).is_integer():
+                s = str(int(fv))
+                return _dt.datetime(int(s[0:4]), int(s[4:6]), int(s[6:8]))
+            if 30000 <= fv <= 80000:
+                return _dt.datetime(1899, 12, 30) + _dt.timedelta(days=fv)
+        except Exception:
+            return None
+
+    s = str(value).strip()
+    if not s:
+        return None
+
+    if re.fullmatch(r"\d{8}", s):
+        try:
+            return _dt.datetime(int(s[0:4]), int(s[4:6]), int(s[6:8]))
+        except Exception:
+            return None
+
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return _dt.datetime.strptime(s, fmt)
+        except Exception:
+            pass
+
+    try:
+        return _dt.datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+def _set_excel_date(ws, cell_ref, value):
+    ws[cell_ref] = _coerce_date_for_excel(value)
+
+def _sheet_name_input(tipo_nota, tipo_factura):
+    tipo_nota_norm = _safe_text(tipo_nota).lower()
+    tipo_factura_norm = _safe_text(tipo_factura).upper()
+
+    if tipo_nota_norm == "factura":
+        return f"Factura {tipo_factura_norm}"
+    if tipo_nota_norm == "credito":
+        return f"Nota Credito {tipo_factura_norm}"
+    if tipo_nota_norm == "debito":
+        return f"Nota Debito {tipo_factura_norm}"
+    return f"Factura {tipo_factura_norm}"
+
+def _legacy_field_positions(tipo_nota, tipo_factura):
+    tipo_nota_norm = _safe_text(tipo_nota).lower()
+    tipo_factura_norm = _safe_text(tipo_factura).upper()
+
+    if tipo_nota_norm == "factura":
+        return {
+            "fecha_emision": 1,
+            "periodo_desde": 2,
+            "periodo_hasta": 3,
+            "fecha_vencimiento_pago": 4,
+            "condicion_iva": 5,
+            "tipo_doc": 6,
+            "cliente": 7,
+            "documento": 8,
+            "domicilio": 9,
+            "cantidad": 10,
+            "descripcion": 11,
+            "precio_unitario": 12,
+            "importe_total": 13,
+            "condicion_venta": 14,
+            "unidad_medida": 15,
+            "bonificacion_porcentaje": 16,
+            "importe_bonificacion": 17,
+            "importe_op_ex": 18,
+            "importe_iva": 19,
+            "importe_tributos": 20,
+            "observaciones": 21,
+            "concepto": 22,
+            "codigo_condicion_iva": 28,
+        }
+
+    if tipo_factura_norm in ("A", "B"):
+        return {
+            "fecha_emision": 4,
+            "periodo_desde": 5,
+            "periodo_hasta": 6,
+            "fecha_vencimiento_pago": 7,
+            "condicion_iva": 3,
+            "tipo_doc": 8,
+            "cliente": 9,
+            "documento": 10,
+            "domicilio": 11,
+            "unidad_mtx": 12,
+            "codigo_mtx": 13,
+            "descripcion": 14,
+            "cantidad": 15,
+            "precio_unitario": 16,
+            "importe_total": 17,
+            "codigo_condicion_iva": 18,
+            "importe_iva": 19,
+            "concepto": 20,
+            "motivo_nota": 21,
+            "importe_otros_tributos": 22,
+        }
+
+    return {
+        "fecha_emision": 2,
+        "periodo_desde": 3,
+        "periodo_hasta": 4,
+        "fecha_vencimiento_pago": 5,
+        "tipo_doc": 6,
+        "cliente": 7,
+        "documento": 8,
+        "domicilio": 9,
+        "importe_total": 10,
+        "concepto": 11,
+        "motivo_nota": 12,
+    }
+
+def _resolve_comprobante_fields(comprobante, tipo_nota, tipo_factura):
+    legacy = _legacy_field_positions(tipo_nota, tipo_factura)
+
+    def pick(field, *names):
+        value = _get_row_value(comprobante, *names, default=None)
+        if value is not None:
+            return value
+        return _get_by_index(comprobante, legacy.get(field), default=None)
+
+    return {
+        "fecha_emision": pick("fecha_emision", "Fecha", "Fecha Emisión", "Fecha Emision"),
+        "periodo_desde": pick("periodo_desde", "Periodo Desde", "Fecha servicio desde"),
+        "periodo_hasta": pick("periodo_hasta", "Periodo Hasta", "Fecha servicio hasta"),
+        "fecha_vencimiento_pago": pick("fecha_vencimiento_pago", "Fecha vencimiento pago"),
+        "condicion_iva": pick("condicion_iva", "Condicion frente al IVA", "Condición frente al IVA"),
+        "tipo_doc": pick("tipo_doc", "Tipo Doc"),
+        "cliente": pick("cliente", "Cliente", "Razón Social", "Razon Social"),
+        "documento": pick("documento", "Documento"),
+        "domicilio": pick("domicilio", "Domicilio"),
+        "cantidad": pick("cantidad", "Cantidad", "Cant."),
+        "descripcion": pick("descripcion", "Descripcion", "Descripción"),
+        "precio_unitario": pick("precio_unitario", "Precio Unitario", "$ Unit."),
+        "importe_total": pick("importe_total", "Importe Total", "Total"),
+        "condicion_venta": pick("condicion_venta", "Condición Venta", "Condicion Venta"),
+        "unidad_medida": pick("unidad_medida", "Unidad Medida"),
+        "bonificacion_porcentaje": pick("bonificacion_porcentaje", "% Bonificación", "% Bonificacion"),
+        "importe_bonificacion": pick("importe_bonificacion", "Importe Bonificación", "Importe Bonificacion"),
+        "importe_op_ex": pick("importe_op_ex", "Importe Op Ex"),
+        "importe_iva": pick("importe_iva", "Importe IVA"),
+        "importe_tributos": pick("importe_tributos", "Importe Tributos", "Importe Otros Tributos"),
+        "observaciones": pick("observaciones", "Observaciones"),
+        "concepto": pick("concepto", "Concepto"),
+        "motivo_nota": pick("motivo_nota", "Motivo Nota"),
+        "codigo_condicion_iva": pick("codigo_condicion_iva", "Codigo Condición IVA", "Codigo Condicion IVA"),
+    }
+
+def _codigo_iva_a_texto(codigo):
+    codigo = _safe_text(codigo)
+    mapa = {
+        "3": "0%",
+        "4": "10,50%",
+        "5": "21%",
+        "6": "27%",
+        "8": "5%",
+        "9": "2.50%",
+    }
+    return mapa.get(codigo, "")
+
+def _extract_array_items(solicitud):
+    try:
+        if "arrayItems" not in solicitud.index:
+            return []
+    except Exception:
+        return []
+
+    value = solicitud.get("arrayItems")
+    if value is None:
+        return []
+    try:
+        if pd.isna(value):
+            return []
+    except Exception:
+        pass
+
+    items = []
+    if isinstance(value, list):
+        for item_group in value:
+            if isinstance(item_group, dict):
+                inner = item_group.get("item", [])
+                if isinstance(inner, list):
+                    items.extend(inner)
+                elif isinstance(inner, dict):
+                    items.append(inner)
+    elif isinstance(value, dict):
+        inner = value.get("item", [])
+        if isinstance(inner, list):
+            items.extend(inner)
+        elif isinstance(inner, dict):
+            items.append(inner)
+
+    return items
+
+def _build_single_item_from_comprobante(comprobante, tipo_nota, tipo_factura):
+    fields = _resolve_comprobante_fields(comprobante, tipo_nota, tipo_factura)
+
+    cantidad = _to_float_safe(fields.get("cantidad"), default=0.0)
+    descripcion = _safe_text(fields.get("descripcion"))
+    precio_unitario = _to_float_safe(fields.get("precio_unitario"), default=0.0)
+    importe_total = _to_float_safe(fields.get("importe_total"), default=0.0)
+    importe_bonificacion = _to_float_safe(fields.get("importe_bonificacion"), default=0.0)
+    importe_iva = _to_float_safe(fields.get("importe_iva"), default=0.0)
+    bonificacion_porcentaje = _to_float_safe(fields.get("bonificacion_porcentaje"), default=0.0)
+    unidad_medida = _safe_text(fields.get("unidad_medida"))
+    codigo_condicion_iva = _safe_text(fields.get("codigo_condicion_iva"))
+
+    if cantidad == 0 and importe_total:
+        cantidad = 1.0
+    if precio_unitario == 0 and cantidad:
+        precio_unitario = importe_total / cantidad if cantidad else importe_total
+
+    if not descripcion:
+        descripcion = (
+            _safe_text(fields.get("motivo_nota"))
+            or _safe_text(fields.get("observaciones"))
+            or f"{_safe_text(tipo_nota, 'Comprobante')} {_safe_text(tipo_factura)}"
+        )
+
+    return {
+        "codigo": 1,
+        "descripcion": descripcion,
+        "cantidad": cantidad if cantidad else 1.0,
+        "precioUnitario": precio_unitario if precio_unitario else importe_total,
+        "importeItem": importe_total,
+        "importeBonificacion": importe_bonificacion,
+        "importeIVA": importe_iva,
+        "codigoCondicionIVA": codigo_condicion_iva,
+        "unidadMedida": unidad_medida,
+        "bonificacionPorcentaje": bonificacion_porcentaje,
+    }
+
+def _write_item_en_fila(ws, fila, item, tipo_factura):
+    codigo = item.get("codigo")
+    descripcion = item.get("descripcion")
+    cantidad = item.get("cantidad", 0)
+    precio_unitario = item.get("precioUnitario", 0)
+    importe_item = item.get("importeItem", 0)
+    importe_bonificacion = item.get("importeBonificacion", 0)
+    importe_iva = item.get("importeIVA", 0)
+    codigo_condicion_iva = item.get("codigoCondicionIVA")
+    bonificacion_porcentaje = item.get("bonificacionPorcentaje", 0)
+    unidad_medida = item.get("unidadMedida", "")
+
+    ws[f"A{fila}"] = codigo
+    ws[f"B{fila}"] = descripcion
+
+    if _safe_text(tipo_factura).upper() in ("A", "B"):
+        _set_num(ws, f"D{fila}", cantidad)
+        _set_num(ws, f"G{fila}", precio_unitario)
+        _set_num(ws, f"I{fila}", importe_item)
+        _set_num(ws, f"H{fila}", importe_bonificacion)
+        _set_num(ws, f"E{fila}", importe_iva)
+        iva_txt = _codigo_iva_a_texto(codigo_condicion_iva)
+        if iva_txt:
+            ws[f"F{fila}"] = iva_txt
+    else:
+        _set_num(ws, f"D{fila}", cantidad)
+        ws[f"E{fila}"] = unidad_medida
+        _set_num(ws, f"F{fila}", precio_unitario)
+        _set_num(ws, f"I{fila}", importe_item)
+        _set_num(ws, f"G{fila}", bonificacion_porcentaje)
+        _set_num(ws, f"H{fila}", importe_bonificacion)
+
+
 def _fecha_full_date(v):
+
+    coerced = _coerce_date_for_excel(v)
+    if coerced is not None:
+        return coerced.date().strftime("%Y-%m-%d")
 
     if v is None:
         return None
-    if isinstance(v, (_dt.date, _dt.datetime)):
-        d = v.date() if isinstance(v, _dt.datetime) else v
-        return d.strftime("%Y-%m-%d")
     s = str(v).strip()
     if not s:
         return None
@@ -314,27 +669,23 @@ def post_procesar_imagenes_y_qr(plantilla_path, factura_output, *, config, tipo_
         escribir_log(f"{obtener_timestamp()} - WARNING: No se pudieron restaurar imágenes del template: {e}")
 
     try:
-        # Armar datos del QR
+        fields = _resolve_comprobante_fields(comprobante, tipo_nota, tipo_factura)
+
         cuit = _to_int_safe(config.get("Cuit") or config.get("CUIT") or config.get("cuit"))
         pto_vta = _to_int_safe(config.get("Punto Venta") or config.get("PtoVta") or config.get("ptoVta"))
         tipo_cmp = _map_tipo_cmp(tipo_nota, tipo_factura)
 
-        if str(tipo_nota).lower() == "factura":
-            fecha_emision = _fecha_full_date(comprobante.iloc[1])
-            doc_nro = comprobante.iloc[7] if len(comprobante) > 7 else None
-        else:
-            fecha_emision = _fecha_full_date(comprobante.iloc[4] if len(comprobante) > 4 else None)
-            if str(tipo_nota).lower() == "credito":
-                doc_nro = comprobante.iloc[8] if len(comprobante) > 8 else None
-            else:
-                doc_nro = comprobante.iloc[7] if len(comprobante) > 7 else None
-
+        fecha_emision = _fecha_full_date(fields.get("fecha_emision"))
+        doc_nro = fields.get("documento")
+        importe = _to_float_safe(fields.get("importe_total"), default=0.0)
         nro_cmp = _to_int_safe(validacion[3])
-        importe = _to_float_safe(comprobante.iloc[12] if len(comprobante) > 12 else 0.0, default=0.0)
         cod_aut = _to_int_safe(validacion[1])
 
         if not all([cuit, pto_vta, tipo_cmp, nro_cmp, cod_aut, fecha_emision]):
-            escribir_log(f"{obtener_timestamp()} - WARNING: No se pudo armar QR (faltan datos). cuit={cuit} ptoVta={pto_vta} tipoCmp={tipo_cmp} nroCmp={nro_cmp} codAut={cod_aut} fecha={fecha_emision}")
+            escribir_log(
+                f"{obtener_timestamp()} - WARNING: No se pudo armar QR (faltan datos). "
+                f"cuit={cuit} ptoVta={pto_vta} tipoCmp={tipo_cmp} nroCmp={nro_cmp} codAut={cod_aut} fecha={fecha_emision}"
+            )
             return
 
         tipo_doc_rec, nro_doc_rec = _guess_tipo_doc_rec_y_nro(doc_nro)
@@ -364,6 +715,7 @@ def post_procesar_imagenes_y_qr(plantilla_path, factura_output, *, config, tipo_
     except Exception as e:
         escribir_log(f"{obtener_timestamp()} - WARNING: No se pudo insertar QR: {e}")
 
+
 #! ------------------------------------------------------------------------------------------------------------------------------------------------------
 #!
 #! ARMAR EXCELS Y LUEGO GUARDAR COMO PDF'S
@@ -386,24 +738,23 @@ def qr_presente_en_xlsx(xlsx_path: str) -> bool:
         return False
 
 def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, config, ListaValidacionCAE, tipo_factura, tipo_nota):
-    # Convertir datos y cuerpo_solicitud a DataFrame si son listas
     contador_input = 2
-    
+
     if isinstance(datos, list):
         datos = pd.DataFrame(datos)
-    
+
     if isinstance(cuerpo_solicitud, list):
         cuerpo_solicitud = pd.DataFrame(cuerpo_solicitud)
+
+    hoja_input_nombre = _sheet_name_input(tipo_nota, tipo_factura)
 
     for i, validacion in enumerate(ListaValidacionCAE):
         if validacion[0] is False:
             escribir_log(f"{obtener_timestamp()} - Salta CAE inválido en índice: {i}")
             escribir_log("--------------------------------------------------")
-            escribir_log(f"{obtener_timestamp()} - Se abre el excel de facturación con el input, para cargar los datos antes de armar la plantilla")  
+            escribir_log(f"{obtener_timestamp()} - Se abre el excel de facturación con el input, para cargar los datos antes de armar la plantilla")
 
-            # Cargar la plantilla de Excel
             try:
-
                 wb_input = load_workbook(input_path)
                 escribir_log(f"{obtener_timestamp()} - Logró abrir correctamente el workbook, con la plantilla {input_path}")
             except FileNotFoundError:
@@ -416,7 +767,12 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                 escribir_log(f"{obtener_timestamp()} - Error al cargar la plantilla: {e}")
                 return
 
-            ws_input = wb_input[f"Factura {tipo_factura}"]
+            try:
+                ws_input = wb_input[hoja_input_nombre]
+            except KeyError:
+                escribir_log(f"{obtener_timestamp()} - Error: La hoja {hoja_input_nombre} no existe en el input.")
+                return
+
             ws_input[f"AD{contador_input}"] = "No realizo la Factura"
             ws_input[f"AE{contador_input}"] = "-"
             ws_input[f"AF{contador_input}"] = "-"
@@ -428,11 +784,9 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
 
         try:
             escribir_log("--------------------------------------------------")
-            escribir_log(f"{obtener_timestamp()} - Se abre el excel de facturación con el input, para cargar los datos antes de armar la plantilla")  
+            escribir_log(f"{obtener_timestamp()} - Se abre el excel de facturación con el input, para cargar los datos antes de armar la plantilla")
 
-            # Cargar la plantilla de Excel
             try:
-
                 wb_input = load_workbook(input_path)
                 escribir_log(f"{obtener_timestamp()} - Logró abrir correctamente el workbook, con la plantilla {input_path}")
             except FileNotFoundError:
@@ -445,7 +799,12 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                 escribir_log(f"{obtener_timestamp()} - Error al cargar la plantilla: {e}")
                 return
 
-            ws_input = wb_input[f"Factura {tipo_factura}"]
+            try:
+                ws_input = wb_input[hoja_input_nombre]
+            except KeyError:
+                escribir_log(f"{obtener_timestamp()} - Error: La hoja {hoja_input_nombre} no existe en el input.")
+                return
+
             ws_input[f"AD{contador_input}"] = "Realizo la Factura"
             ws_input[f"AE{contador_input}"] = validacion[1]
             ws_input[f"AF{contador_input}"] = validacion[2]
@@ -455,22 +814,20 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
             wb_input.save(input_path)
 
             escribir_log("--------------------------------------------------")
-
             escribir_log("Iniciando proceso para completar la plantilla...")
             escribir_log(f"{obtener_timestamp()} - Ruta de la plantilla: {plantilla_path}")
             escribir_log(f"{obtener_timestamp()} - Tipo de comprobante: {tipo_nota} {tipo_factura}")
 
             solicitud = cuerpo_solicitud.iloc[i]
             comprobante = datos.iloc[i]
+            fields = _resolve_comprobante_fields(comprobante, tipo_nota, tipo_factura)
 
             escribir_log(f"{obtener_timestamp()} - Logró completar los datos de solicitud y comprobante")
 
-            # Comprobamos si 'plantilla_path' tiene un valor válido
             if not plantilla_path:
                 escribir_log(f"{obtener_timestamp()} - Error: La ruta de la plantilla no está definida.")
                 return
 
-            # Cargar la plantilla de Excel
             try:
                 wb = load_workbook(plantilla_path)
                 escribir_log(f"{obtener_timestamp()} - Logró abrir correctamente el workbook, con la plantilla {plantilla_path}")
@@ -484,14 +841,12 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                 escribir_log(f"{obtener_timestamp()} - Error al cargar la plantilla: {e}")
                 return
 
-            hojas = ['Hoja1', 'Hoja2', 'Hoja3']
+            hojas = ["Hoja1", "Hoja2", "Hoja3"]
 
-            # Rellenar los datos comunes de la factura
             for hoja_nombre in hojas:
                 try:
                     ws = wb[hoja_nombre]
 
-                    # Completa las celdas de la hoja (con ceros a la izquierda donde corresponde)
                     pto_vta_raw = config.get("Punto Venta", "-")
                     pto_vta_int = _to_int_safe(pto_vta_raw)
                     pto_vta_str = f"{pto_vta_int:05d}" if pto_vta_int is not None else str(pto_vta_raw)
@@ -503,160 +858,63 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                     domicilio_comercial = str(config.get("Domicilio Comercial", "-") or "-")
                     cuit_emisor = str(config.get("Cuit", "-") or "-")
 
-                    ws['G3'] = pto_vta_str
-                    ws['G5'] = cuit_emisor
-                    ws['B4'] = razon_social
-                    ws['C5'] = domicilio_comercial
-                    ws['C7'] = config.get("Condición IVA", "-")
-                    ws['I3'] = nro_cmp_str 
-
+                    ws["G3"] = pto_vta_str
+                    ws["G5"] = cuit_emisor
+                    ws["B4"] = razon_social
+                    ws["C5"] = domicilio_comercial
+                    ws["C7"] = config.get("Condición IVA", "-")
+                    ws["I3"] = nro_cmp_str
 
                     try:
                         rs_up = razon_social.upper()
-                        a2_val = ws['A2'].value
+                        a2_val = ws["A2"].value
                         if a2_val is None or str(a2_val).strip() == "":
-                            ws['A2'] = rs_up
+                            ws["A2"] = rs_up
                         else:
-
                             if rs_up not in str(a2_val).upper():
-                                ws['A2'] = f"{str(a2_val)} - {rs_up}"
-                        ws['A2'].font = ws['A2'].font.copy(sz=10)
+                                ws["A2"] = f"{str(a2_val)} - {rs_up}"
+                        ws["A2"].font = ws["A2"].font.copy(sz=10)
                     except Exception:
                         pass
-
 
                     try:
-                        ws['C5'].font = ws['C5'].font.copy(sz=7)
+                        ws["C5"].font = ws["C5"].font.copy(sz=7)
                     except Exception:
                         pass
 
-                    # Agregar CAE y fecha de vencimiento del CAE
-                    ws['H38'] = validacion[1]  # CAE
-                    ws['H39'] = validacion[2]  # Fecha vencimiento CAE
+                    ws["H38"] = validacion[1]
+                    ws["H39"] = validacion[2]
 
-                    if tipo_nota == "Factura":
-                        ws['G4'] = comprobante.iloc[1]  # Fecha Emisión
-                        ws['C8'] = comprobante.iloc[2]  # Fecha periodo desde
-                        ws['E8'] = comprobante.iloc[3]  # Fecha periodo hasta
-                        ws['I8'] = comprobante.iloc[1]  # Fecha Vencimiento pago, por ahora puesto con la misma de fecha emisión 
-                        ws['C11'] = comprobante.iloc[4]  # Condición frente al IVA del comprador
-                        ws['F9'] = comprobante.iloc[6]  # Razón Social, Cliente
-                        ws['B9'] = comprobante.iloc[7]  # CUIT / CUIL
-                        ws['F11'] = comprobante.iloc[8]  # Domicilio
-                        ws['C13'] = comprobante.iloc[13]  # Condición de venta
+                    fecha_emision = fields.get("fecha_emision")
+                    periodo_desde = fields.get("periodo_desde")
+                    periodo_hasta = fields.get("periodo_hasta")
+                    fecha_vencimiento_pago = fields.get("fecha_vencimiento_pago") or fecha_emision
 
-                    elif tipo_nota == "Credito":
-                        ws['G4'] = comprobante.iloc[4]  # Fecha Emisión
-                        ws['C8'] = comprobante.iloc[5]  # Fecha periodo desde
-                        ws['E8'] = comprobante.iloc[6]  # Fecha periodo hasta
-                        ws['I8'] = comprobante.iloc[7]  # Fecha Vencimiento pago, por ahora puesto con la misma de fecha emisión 
-                        ws['C11'] = comprobante.iloc[3]  # Condición frente al IVA del comprador
-                        ws['F9'] = comprobante.iloc[9]  # Razón Social, Cliente
-                        ws['B9'] = comprobante.iloc[8]  # CUIT / CUIL
-                        ws['F11'] = comprobante.iloc[11]  # Domicilio
-                        ws['C13'] = comprobante.iloc[20]  # Condición de venta
-                    
-                    elif tipo_nota == "Debito":
-                        ws['G4'] = comprobante.iloc[4]  # Fecha Emisión
-                        ws['C8'] = comprobante.iloc[5]  # Fecha periodo desde
-                        ws['E8'] = comprobante.iloc[6]  # Fecha periodo hasta
-                        ws['I8'] = comprobante.iloc[7]  # Fecha Vencimiento pago, por ahora puesto con la misma de fecha emisión 
-                        ws['C11'] = comprobante.iloc[3]  # Condición frente al IVA del comprador
-                        ws['F9'] = comprobante.iloc[6]  # Razón Social, Cliente
-                        ws['B9'] = comprobante.iloc[7]  # CUIT / CUIL
-                        ws['F11'] = comprobante.iloc[8]  # Domicilio
-                        ws['C13'] = comprobante.iloc[20]  # Condición de venta
+                    _set_excel_date(ws, "G4", fecha_emision)
+                    _set_excel_date(ws, "C8", periodo_desde)
+                    _set_excel_date(ws, "E8", periodo_hasta)
+                    _set_excel_date(ws, "I8", fecha_vencimiento_pago)
 
-                    # Función para verificar si una celda está combinada
-                    def es_celda_combinada(ws, fila, columna):
-                        for rango in ws.merged_cells.ranges:
-                            if ws.cell(row=fila, column=columna).coordinate in rango:
-                                return True
-                        return False
+                    ws["C11"] = _safe_text(fields.get("condicion_iva"))
+                    ws["F9"] = _safe_text(fields.get("cliente"))
+                    ws["B9"] = _safe_text(fields.get("documento"))
+                    ws["F11"] = _safe_text(fields.get("domicilio"))
+                    ws["C13"] = _safe_text(fields.get("condicion_venta"))
 
-                    # Inicializar la fila donde se empezarán a escribir los ítems
                     fila = 15
+                    items = _extract_array_items(solicitud)
+                    if not items:
+                        items = [_build_single_item_from_comprobante(comprobante, tipo_nota, tipo_factura)]
 
-                    # Acceder a los elementos de la solicitud JSON
-                    if 'arrayItems' in solicitud:  # Verificar que exista el array de ítems
-                        # Recorrer todos los ítems de arrayItems
-                        for idx, item_group in enumerate(solicitud['arrayItems'], start=1):
-                            # Dentro de cada grupo de ítems, recorrer cada "item"
-                            for item in item_group['item']:
-                                # Verificar antes de escribir si la celda está combinada
-                                if not es_celda_combinada(ws, fila, 1):
-                                    ws[f'A{fila}'] = item['codigo']
-                                if not es_celda_combinada(ws, fila, 2):
-                                    ws[f'B{fila}'] = item['descripcion']
-                                if not es_celda_combinada(ws, fila, 3):
-                                    _set_num(ws, f'D{fila}', item['cantidad'])
-                                if not es_celda_combinada(ws, fila, 4):
-                                    _set_num(ws, f'G{fila}', item['precioUnitario'])
-                                if not es_celda_combinada(ws, fila, 5):
-                                    _set_num(ws, f'I{fila}', item['importeItem'])
-                                if not es_celda_combinada(ws, fila, 6):
-                                    _set_num(ws, f'H{fila}', item.get('importeBonificacion', 0))  # Importe de Bonificación (si existe)
-                                if not es_celda_combinada(ws, fila, 7):
-                                    _set_num(ws, f'E{fila}', item.get('importeIVA', 0))  # Importe de IVA (si existe)
-                                if not es_celda_combinada(ws, fila, 8):
-                                    if item['codigoCondicionIVA'] == "3":
-                                        ws[f'F{fila}'] = "0%"  # Porcentaje Del IVA
-                                    if item['codigoCondicionIVA'] == "4":
-                                        ws[f'F{fila}'] = "10,50%"  # Porcentaje Del IVA
-                                    if item['codigoCondicionIVA'] == "5":
-                                        ws[f'F{fila}'] = "21%"  # Porcentaje Del IVA
-                                    if item['codigoCondicionIVA'] == "6":
-                                        ws[f'F{fila}'] = "27%"  # Porcentaje Del IVA
-                                    if item['codigoCondicionIVA'] == "8":
-                                        ws[f'F{fila}'] = "5%"  # Porcentaje Del IVA
-                                    if item['codigoCondicionIVA'] == "9":
-                                        ws[f'F{fila}'] = "2.50%"  # Porcentaje Del IVA
-                                fila += 1  # Avanzar a la siguiente fila después de cada ítem
-                    else:
-                        # Si entro en este else, es porque solo tiene 1 item:
-                        numero_producto = 1 
+                    for item in items:
+                        _write_item_en_fila(ws, fila, item, tipo_factura)
+                        fila += 1
 
-                        if tipo_factura == "A" or tipo_factura == "B":
-                            # Primer producto que está directamente en el comprobante
-                            ws[f'A{fila}'] = numero_producto
-                            _set_num(ws, f'D{fila}', comprobante.iloc[9])  # Cantidad de cosas vendidas
-                            ws[f'B{fila}'] = comprobante.iloc[10]  # Descripción del producto (producto / servicio)
-                            _set_num(ws, f'G{fila}', int(comprobante.iloc[11]))  # Precio Unitario
-                            _set_num(ws, f'I{fila}', int(comprobante.iloc[12]))  # Total de todo
-                            if tipo_factura == "A":
-                                _set_num(ws, f'E{fila}', comprobante.iloc[18])  # Importe IVA  
-                                if comprobante.iloc[27] == "3":
-                                    ws[f'F{fila}'] = "0%"  # Porcentaje Del IVA
-                                if comprobante.iloc[27] == "4":
-                                    ws[f'F{fila}'] = "10,50%"  # Porcentaje Del IVA
-                                if comprobante.iloc[27] == "5":
-                                    ws[f'F{fila}'] = "21%"  # Porcentaje Del IVA
-                                if comprobante.iloc[27] == "6":
-                                    ws[f'F{fila}'] = "27%"  # Porcentaje Del IVA
-                                if comprobante.iloc[27] == "8":
-                                    ws[f'F{fila}'] = "5%"  # Porcentaje Del IVA
-                                if comprobante.iloc[27] == "9":
-                                    ws[f'F{fila}'] = "2.50%"  # Porcentaje Del IVA
-                            else:
-                                ws[f'F{fila}'] = int(comprobante.iloc[15])  # Porcentaje (%) de Bonificación                                
-                            _set_num(ws, f'H{fila}', int(comprobante.iloc[16]))  # Importe de bonificación
-
-                        else:
-                            # Primer producto que está directamente en el comprobante
-                            ws[f'A{fila}'] = numero_producto
-                            _set_num(ws, f'D{fila}', comprobante.iloc[9])  # Cantidad de cosas vendidas
-                            ws[f'B{fila}'] = comprobante.iloc[10]  # Descripción del producto (producto / servicio)
-                            _set_num(ws, f'F{fila}', int(comprobante.iloc[11]))  # Precio Unitario
-                            _set_num(ws, f'I{fila}', int(comprobante.iloc[12]))  # Total de todo
-                            ws[f'E{fila}'] = comprobante.iloc[14]  # Unidad de Medida     
-                            ws[f'G{fila}'] = int(comprobante.iloc[15])  # Porcentaje (%) de Bonificación
-                            _set_num(ws, f'H{fila}', int(comprobante.iloc[16]))  # Importe de bonificación
-                            
                 except KeyError:
                     escribir_log(f"{obtener_timestamp()} - Error: La hoja {hoja_nombre} no existe en el archivo de plantilla.")
                 except Exception as e:
                     escribir_log(f"{obtener_timestamp()} - Error al intentar completar la hoja {hoja_nombre}: {e}")
-            # Guardar la factura en un nuevo archivo (nombre estándar: CUIT_TIPO(3)_PTO(5)_NRO(8))
+
             try:
                 cuit_arch = _solo_digitos(config.get("Cuit", ""))
                 tipo_cmp = _map_tipo_cmp(tipo_nota, tipo_factura)
@@ -676,7 +934,6 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
             wb.save(factura_output)
             escribir_log(f"{obtener_timestamp()} - Factura generada y guardada en {factura_output}.")
 
-            # 1) Post-procesado general (copia imágenes + intenta QR)
             try:
                 post_procesar_imagenes_y_qr(
                     plantilla_path,
@@ -690,7 +947,6 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
             except Exception as e:
                 escribir_log(f"{obtener_timestamp()} - WARNING: Falló el post-procesado de imágenes/QR: {e}")
 
-            # 2) Reintento SOLO si falta el QR (para que sea “sí o sí”)
             try:
                 if not qr_presente_en_xlsx(factura_output):
                     asegurar_qr_en_factura(
@@ -701,11 +957,10 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                     )
             except Exception as e:
                 escribir_log(f"{obtener_timestamp()} - WARNING: Falló el reintento del QR: {e}")
-        
-        
+
         except Exception as e:
-                escribir_log(f"{obtener_timestamp()} - Error al completar plantilla para índice {i}: {str(e)}")
-                print(f"{obtener_timestamp()} - Error al completar plantilla para índice {i}: {str(e)}")
+            escribir_log(f"{obtener_timestamp()} - Error al completar plantilla para índice {i}: {str(e)}")
+            print(f"{obtener_timestamp()} - Error al completar plantilla para índice {i}: {str(e)}")
 
     os.remove(plantilla_path)
 
