@@ -857,12 +857,20 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                     razon_social = str(config.get("Razón Social", "-") or "-")
                     domicilio_comercial = str(config.get("Domicilio Comercial", "-") or "-")
                     cuit_emisor = str(config.get("Cuit", "-") or "-")
+                    ingresos_brutos = str(config.get("Ingresos Brutos") or config.get("ingresos_brutos") or "-")
+                    fecha_inicio_actividades = str(
+                        config.get("Fecha de Inicio de Actividades")
+                        or config.get("fecha_inicio_actividades")
+                        or "-"
+                    )
 
                     ws["G3"] = pto_vta_str
                     ws["G5"] = cuit_emisor
                     ws["B4"] = razon_social
                     ws["C5"] = domicilio_comercial
+                    ws["C6"] = ingresos_brutos
                     ws["C7"] = config.get("Condición IVA", "-")
+                    ws["I6"] = fecha_inicio_actividades
                     ws["I3"] = nro_cmp_str
 
                     try:

@@ -16,6 +16,8 @@ EXCEL_HEADERS = [
     "Razón Social",
     "Domicilio Comercial",
     "Condición IVA",
+    "Ingresos Brutos",
+    "Fecha de Inicio de Actividades"
 ]
 
 API_TO_EXCEL = {
@@ -27,8 +29,9 @@ API_TO_EXCEL = {
     "razon_social": "Razón Social",
     "domicilio_comercial": "Domicilio Comercial",
     "condicion_iva": "Condición IVA",
+    "ingresos_brutos": "Ingresos Brutos",
+    "fecha_inicio_actividades": "Fecha de Inicio de Actividades"
 }
-
 
 def _norm_int(v: Any) -> Optional[int]:
     try:
@@ -137,8 +140,9 @@ def _row_to_api(ws, row_idx: int, hmap: Dict[str, int]) -> Dict[str, Any]:
         "razon_social": (get("Razón Social") or ""),
         "domicilio_comercial": (get("Domicilio Comercial") or ""),
         "condicion_iva": (get("Condición IVA") or ""),
+        "ingresos_brutos": (get("Ingresos Brutos") or ""),
+        "fecha_inicio_actividades": (get("Fecha de Inicio de Actividades") or ""),
     }
-
 
 def list_cuits(excel_path: str) -> List[Dict[str, Any]]:
     lock_path = excel_path + ".lock"
