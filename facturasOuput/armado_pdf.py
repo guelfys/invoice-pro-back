@@ -2,6 +2,7 @@ from backend.log import escribir_log, obtener_timestamp
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 import win32com.client as win32
 import os
 import shutil
@@ -74,9 +75,29 @@ def _set_num(ws, cell_ref, value, fmt="#,##0.00"):
     except Exception:
         v = 0.0
 
-    c = ws[cell_ref]
-    c.value = v
+    c = _set_cell_value(ws, cell_ref, v)
     c.number_format = fmt
+
+
+def _resolve_cell_ref(ws, cell_ref):
+    try:
+        for merged_range in ws.merged_cells.ranges:
+            if cell_ref in merged_range:
+                return f"{get_column_letter(merged_range.min_col)}{merged_range.min_row}"
+    except Exception:
+        pass
+    return cell_ref
+
+
+def _set_cell_value(ws, cell_ref, value):
+    target_ref = _resolve_cell_ref(ws, cell_ref)
+    cell = ws[target_ref]
+    cell.value = value
+    return cell
+
+
+def _get_cell(ws, cell_ref):
+    return ws[_resolve_cell_ref(ws, cell_ref)]
 
 
 
@@ -90,6 +111,32 @@ def _normalize_key(value):
         .replace("\n", " ")
         .replace("\r", " ")
     )
+
+
+def _config_lookup(config):
+    if not isinstance(config, dict):
+        return {}
+    return {_normalize_key(key): key for key in config.keys() if key is not None}
+
+
+def _get_config_value(config, *possible_names, default=None):
+    lookup = _config_lookup(config)
+    for name in possible_names:
+        real_key = lookup.get(_normalize_key(name))
+        if real_key is None:
+            continue
+        value = config.get(real_key)
+        if value is None:
+            continue
+        try:
+            if pd.isna(value):
+                continue
+        except Exception:
+            pass
+        if isinstance(value, str) and value.strip() == "":
+            continue
+        return value
+    return default
 
 def _row_lookup(row):
     try:
@@ -145,6 +192,10 @@ def _safe_text(value, default=""):
     s = str(value).strip()
     return s if s else default
 
+
+def _safe_config_text(config, *possible_names, default=""):
+    return _safe_text(_get_config_value(config, *possible_names, default=default), default=default)
+
 def _coerce_date_for_excel(value):
     if value is None:
         return None
@@ -197,7 +248,7 @@ def _coerce_date_for_excel(value):
         return None
 
 def _set_excel_date(ws, cell_ref, value):
-    ws[cell_ref] = _coerce_date_for_excel(value)
+    _set_cell_value(ws, cell_ref, _coerce_date_for_excel(value))
 
 def _sheet_name_input(tipo_nota, tipo_factura):
     tipo_nota_norm = _safe_text(tipo_nota).lower()
@@ -412,8 +463,8 @@ def _write_item_en_fila(ws, fila, item, tipo_factura):
     bonificacion_porcentaje = item.get("bonificacionPorcentaje", 0)
     unidad_medida = item.get("unidadMedida", "")
 
-    ws[f"A{fila}"] = codigo
-    ws[f"B{fila}"] = descripcion
+    _set_cell_value(ws, f"A{fila}", codigo)
+    _set_cell_value(ws, f"B{fila}", descripcion)
 
     if _safe_text(tipo_factura).upper() in ("A", "B"):
         _set_num(ws, f"D{fila}", cantidad)
@@ -423,10 +474,10 @@ def _write_item_en_fila(ws, fila, item, tipo_factura):
         _set_num(ws, f"E{fila}", importe_iva)
         iva_txt = _codigo_iva_a_texto(codigo_condicion_iva)
         if iva_txt:
-            ws[f"F{fila}"] = iva_txt
+            _set_cell_value(ws, f"F{fila}", iva_txt)
     else:
         _set_num(ws, f"D{fila}", cantidad)
-        ws[f"E{fila}"] = unidad_medida
+        _set_cell_value(ws, f"E{fila}", unidad_medida)
         _set_num(ws, f"F{fila}", precio_unitario)
         _set_num(ws, f"I{fila}", importe_item)
         _set_num(ws, f"G{fila}", bonificacion_porcentaje)
@@ -773,10 +824,10 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                 escribir_log(f"{obtener_timestamp()} - Error: La hoja {hoja_input_nombre} no existe en el input.")
                 return
 
-            ws_input[f"AD{contador_input}"] = "No realizo la Factura"
-            ws_input[f"AE{contador_input}"] = "-"
-            ws_input[f"AF{contador_input}"] = "-"
-            ws_input[f"AG{contador_input}"] = "-"
+            _set_cell_value(ws_input, f"AD{contador_input}", "No realizo la Factura")
+            _set_cell_value(ws_input, f"AE{contador_input}", "-")
+            _set_cell_value(ws_input, f"AF{contador_input}", "-")
+            _set_cell_value(ws_input, f"AG{contador_input}", "-")
             contador_input += 1
 
             wb_input.save(input_path)
@@ -805,10 +856,10 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                 escribir_log(f"{obtener_timestamp()} - Error: La hoja {hoja_input_nombre} no existe en el input.")
                 return
 
-            ws_input[f"AD{contador_input}"] = "Realizo la Factura"
-            ws_input[f"AE{contador_input}"] = validacion[1]
-            ws_input[f"AF{contador_input}"] = validacion[2]
-            ws_input[f"AG{contador_input}"] = validacion[3]
+            _set_cell_value(ws_input, f"AD{contador_input}", "Realizo la Factura")
+            _set_cell_value(ws_input, f"AE{contador_input}", validacion[1])
+            _set_cell_value(ws_input, f"AF{contador_input}", validacion[2])
+            _set_cell_value(ws_input, f"AG{contador_input}", validacion[3])
             contador_input += 1
 
             wb_input.save(input_path)
@@ -847,51 +898,64 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                 try:
                     ws = wb[hoja_nombre]
 
-                    pto_vta_raw = config.get("Punto Venta", "-")
+                    pto_vta_raw = _get_config_value(config, "Punto Venta", "PuntoVenta", "punto_venta", "pto_vta", "PtoVta", default="-")
                     pto_vta_int = _to_int_safe(pto_vta_raw)
                     pto_vta_str = f"{pto_vta_int:05d}" if pto_vta_int is not None else str(pto_vta_raw)
 
                     nro_cmp_int = _to_int_safe(validacion[3])
                     nro_cmp_str = f"{nro_cmp_int:08d}" if nro_cmp_int is not None else str(validacion[3])
 
-                    razon_social = str(config.get("Razón Social", "-") or "-")
-                    domicilio_comercial = str(config.get("Domicilio Comercial", "-") or "-")
-                    cuit_emisor = str(config.get("Cuit", "-") or "-")
-                    ingresos_brutos = str(config.get("Ingresos Brutos") or config.get("ingresos_brutos") or "-")
-                    fecha_inicio_actividades = str(
-                        config.get("Fecha de Inicio de Actividades")
-                        or config.get("fecha_inicio_actividades")
-                        or "-"
+                    razon_social = _safe_config_text(config, "Razón Social", "Razon Social", "razon_social", default="-")
+                    domicilio_comercial = _safe_config_text(config, "Domicilio Comercial", "domicilio_comercial", default="-")
+                    cuit_emisor = _safe_config_text(config, "Cuit", "CUIT", "cuit", default="-")
+                    ingresos_brutos = _safe_config_text(config, "Ingresos Brutos", "ingresos_brutos", default="-")
+                    fecha_inicio_actividades = _safe_config_text(
+                        config,
+                        "Fecha de Inicio de Actividades",
+                        "Fecha Inicio Actividades",
+                        "fecha_inicio_actividades",
+                        default="-"
                     )
+                    condicion_iva = _safe_config_text(config, "Condición IVA", "Condicion IVA", "condicion_iva", default="-")
 
-                    ws["G3"] = pto_vta_str
-                    ws["G5"] = cuit_emisor
-                    ws["B4"] = razon_social
-                    ws["C5"] = domicilio_comercial
-                    ws["C6"] = ingresos_brutos
-                    ws["C7"] = config.get("Condición IVA", "-")
-                    ws["I6"] = fecha_inicio_actividades
-                    ws["I3"] = nro_cmp_str
+                    debug_pdf_msg = (
+                        f"{obtener_timestamp()} - DEBUG PDF [{hoja_nombre}] "
+                        f"Ingresos Brutos={repr(ingresos_brutos)} -> G6 | "
+                        f"Fecha Inicio Actividades={repr(fecha_inicio_actividades)} -> I7"
+                    )
+                    print(debug_pdf_msg)
+                    escribir_log(debug_pdf_msg)
+
+                    _set_cell_value(ws, "G3", pto_vta_str)
+                    _set_cell_value(ws, "G5", cuit_emisor)
+                    _set_cell_value(ws, "B4", razon_social)
+                    _set_cell_value(ws, "C5", domicilio_comercial)
+                    _set_cell_value(ws, "G6", ingresos_brutos)
+                    _set_cell_value(ws, "C7", condicion_iva)
+                    _set_cell_value(ws, "I7", fecha_inicio_actividades)
+                    _set_cell_value(ws, "I3", nro_cmp_str)
 
                     try:
                         rs_up = razon_social.upper()
-                        a2_val = ws["A2"].value
+                        a2_cell = _get_cell(ws, "A2")
+                        a2_val = a2_cell.value
                         if a2_val is None or str(a2_val).strip() == "":
-                            ws["A2"] = rs_up
+                            a2_cell.value = rs_up
                         else:
                             if rs_up not in str(a2_val).upper():
-                                ws["A2"] = f"{str(a2_val)} - {rs_up}"
-                        ws["A2"].font = ws["A2"].font.copy(sz=10)
+                                a2_cell.value = f"{str(a2_val)} - {rs_up}"
+                        a2_cell.font = a2_cell.font.copy(sz=10)
                     except Exception:
                         pass
 
                     try:
-                        ws["C5"].font = ws["C5"].font.copy(sz=7)
+                        c5_cell = _get_cell(ws, "C5")
+                        c5_cell.font = c5_cell.font.copy(sz=7)
                     except Exception:
                         pass
 
-                    ws["H38"] = validacion[1]
-                    ws["H39"] = validacion[2]
+                    _set_cell_value(ws, "H38", validacion[1])
+                    _set_cell_value(ws, "H39", validacion[2])
 
                     fecha_emision = fields.get("fecha_emision")
                     periodo_desde = fields.get("periodo_desde")
@@ -903,11 +967,11 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                     _set_excel_date(ws, "E8", periodo_hasta)
                     _set_excel_date(ws, "I8", fecha_vencimiento_pago)
 
-                    ws["C11"] = _safe_text(fields.get("condicion_iva"))
-                    ws["F9"] = _safe_text(fields.get("cliente"))
-                    ws["B9"] = _safe_text(fields.get("documento"))
-                    ws["F11"] = _safe_text(fields.get("domicilio"))
-                    ws["C13"] = _safe_text(fields.get("condicion_venta"))
+                    _set_cell_value(ws, "C11", _safe_text(fields.get("condicion_iva")))
+                    _set_cell_value(ws, "F9", _safe_text(fields.get("cliente")))
+                    _set_cell_value(ws, "B9", _safe_text(fields.get("documento")))
+                    _set_cell_value(ws, "F11", _safe_text(fields.get("domicilio")))
+                    _set_cell_value(ws, "C13", _safe_text(fields.get("condicion_venta")))
 
                     fila = 15
                     items = _extract_array_items(solicitud)
@@ -924,12 +988,13 @@ def completar_plantilla(input_path, plantilla_path, datos, cuerpo_solicitud, con
                     escribir_log(f"{obtener_timestamp()} - Error al intentar completar la hoja {hoja_nombre}: {e}")
 
             try:
-                cuit_arch = _solo_digitos(config.get("Cuit", ""))
+                cuit_arch = _solo_digitos(_get_config_value(config, "Cuit", "CUIT", "cuit", default=""))
                 tipo_cmp = _map_tipo_cmp(tipo_nota, tipo_factura)
                 tipo_cmp_str = f"{int(tipo_cmp):03d}" if tipo_cmp is not None else "000"
 
-                pto_vta_int = _to_int_safe(config.get("Punto Venta"))
-                pto_vta_str = f"{pto_vta_int:05d}" if pto_vta_int is not None else str(config.get("Punto Venta", "-"))
+                pto_vta_raw = _get_config_value(config, "Punto Venta", "PuntoVenta", "punto_venta", "pto_vta", "PtoVta", default="-")
+                pto_vta_int = _to_int_safe(pto_vta_raw)
+                pto_vta_str = f"{pto_vta_int:05d}" if pto_vta_int is not None else str(pto_vta_raw)
 
                 nro_cmp_int = _to_int_safe(validacion[3])
                 nro_cmp_str = f"{nro_cmp_int:08d}" if nro_cmp_int is not None else str(validacion[3])

@@ -831,6 +831,8 @@ async def add_cuit(
         "razon_social": "",
         "domicilio_comercial": "",
         "condicion_iva": "",
+        "ingresos_brutos": "",
+        "fecha_inicio_actividades": "",
         "puntos_venta": [],
         "actividades": [],
         "selected_punto_venta": 0,
@@ -886,6 +888,8 @@ def sync_excel_from_cuit_cache(cuit: str, req: SyncExcelRequest):
             razon_social=str(cuit_item.get("razon_social") or ""),
             domicilio_comercial=str(cuit_item.get("domicilio_comercial") or ""),
             condicion_iva=str(cuit_item.get("condicion_iva") or ""),
+            ingresos_brutos=str(cuit_item.get("ingresos_brutos") or ""),
+            fecha_inicio_actividades=str(cuit_item.get("fecha_inicio_actividades") or ""),
             punto_venta=pv,
             numero_actividad=na,
         )

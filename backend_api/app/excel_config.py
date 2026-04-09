@@ -1,7 +1,10 @@
 # app/excel_config.py
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional
+import datetime
+import unicodedata
 
 import openpyxl
 
@@ -33,6 +36,53 @@ API_TO_EXCEL = {
     "fecha_inicio_actividades": "Fecha de Inicio de Actividades"
 }
 
+
+def normalizar_nombre_columna_config(value: Any) -> str:
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+    if not text:
+        return ""
+
+    folded = unicodedata.normalize("NFKD", text)
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    folded = folded.lower().replace("_", " ")
+    folded = re.sub(r"[^a-z0-9]+", " ", folded)
+    folded = re.sub(r"\s+", " ", folded).strip()
+
+    aliases = {
+        "cuit": "Cuit",
+        "punto venta": "Punto Venta",
+        "punto de venta": "Punto Venta",
+        "pto vta": "Punto Venta",
+        "pto venta": "Punto Venta",
+        "tipo comprobante": "Tipo Comprobante",
+        "numero actividad": "Numero Actividad",
+        "nro actividad": "Numero Actividad",
+        "con detalle de items": "¿Con detalle de Items?",
+        "con detalle de item": "¿Con detalle de Items?",
+        "razon social": "Razón Social",
+        "domicilio comercial": "Domicilio Comercial",
+        "condicion iva": "Condición IVA",
+        "ingresos brutos": "Ingresos Brutos",
+        "fecha de inicio de actividades": "Fecha de Inicio de Actividades",
+        "fecha inicio actividades": "Fecha de Inicio de Actividades",
+    }
+    return aliases.get(folded, text)
+
+
+def _normalizar_valor_config(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.strftime("%d/%m/%Y")
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
 def _norm_int(v: Any) -> Optional[int]:
     try:
         if v is None:
@@ -61,6 +111,18 @@ def _si_no_to_bool(v: Any) -> bool:
     if isinstance(v, bool):
         return v
     return str(v).strip().lower() in ("si", "sí", "true", "1", "y", "yes")
+
+
+def _norm_text(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, (datetime.datetime, datetime.date)):
+        return v.strftime("%d/%m/%Y")
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v).strip()
 
 
 class _LockFile:
@@ -103,7 +165,7 @@ def _header_map(ws) -> Dict[str, int]:
     for col_idx, cell in enumerate(ws[1], start=1):
         if cell.value is None:
             continue
-        key = str(cell.value).strip()
+        key = normalizar_nombre_columna_config(cell.value)
         if key:
             m[key] = col_idx
     return m
@@ -131,17 +193,25 @@ def _row_to_api(ws, row_idx: int, hmap: Dict[str, int]) -> Dict[str, Any]:
         ci = hmap.get(h)
         return ws.cell(row=row_idx, column=ci).value if ci else None
 
+    ingresos_brutos = get("Ingresos Brutos")
+    if ingresos_brutos in (None, ""):
+        ingresos_brutos = ws["I2"].value
+
+    fecha_inicio_actividades = get("Fecha de Inicio de Actividades")
+    if fecha_inicio_actividades in (None, ""):
+        fecha_inicio_actividades = ws["J2"].value
+
     return {
         "cuit": _norm_int(get("Cuit")),
         "punto_venta": _norm_int(get("Punto Venta")),
         "tipo_comprobante": _norm_int(get("Tipo Comprobante")),
         "numero_actividad": _norm_int(get("Numero Actividad")),
         "con_detalle_items": _si_no_to_bool(get("¿Con detalle de Items?")),
-        "razon_social": (get("Razón Social") or ""),
-        "domicilio_comercial": (get("Domicilio Comercial") or ""),
-        "condicion_iva": (get("Condición IVA") or ""),
-        "ingresos_brutos": (get("Ingresos Brutos") or ""),
-        "fecha_inicio_actividades": (get("Fecha de Inicio de Actividades") or ""),
+        "razon_social": _norm_text(get("Razón Social")),
+        "domicilio_comercial": _norm_text(get("Domicilio Comercial")),
+        "condicion_iva": _norm_text(get("Condición IVA")),
+        "ingresos_brutos": _norm_text(_normalizar_valor_config(ingresos_brutos)),
+        "fecha_inicio_actividades": _norm_text(_normalizar_valor_config(fecha_inicio_actividades)),
     }
 
 def list_cuits(excel_path: str) -> List[Dict[str, Any]]:
@@ -237,6 +307,8 @@ def sync_row2_all_tipos(
     razon_social: str = "",
     domicilio_comercial: str = "",
     condicion_iva: str = "",
+    ingresos_brutos: Optional[str] = None,
+    fecha_inicio_actividades: Optional[str] = None,
     punto_venta: int,
     numero_actividad: int,
 ) -> Dict[str, Any]:
@@ -261,6 +333,10 @@ def sync_row2_all_tipos(
             ws.cell(row=r, column=hmap["Razón Social"]).value = razon_social or ""
             ws.cell(row=r, column=hmap["Domicilio Comercial"]).value = domicilio_comercial or ""
             ws.cell(row=r, column=hmap["Condición IVA"]).value = condicion_iva or ""
+            if ingresos_brutos is not None:
+                ws.cell(row=r, column=hmap["Ingresos Brutos"]).value = _norm_text(ingresos_brutos)
+            if fecha_inicio_actividades is not None:
+                ws.cell(row=r, column=hmap["Fecha de Inicio de Actividades"]).value = _norm_text(fecha_inicio_actividades)
 
             changed[tipo] = {"sheet": sheet, "row": r}
 
