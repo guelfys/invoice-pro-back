@@ -5,12 +5,14 @@ from io import BytesIO
 import datetime as _dt
 import tempfile
 import os
+import logging
 
 import win32com.client as win32
 
 try:
     import qrcode
-except Exception:
+except Exception as e:
+    logging.warning(f"qrcode no disponible: {e}")
     qrcode = None
 
 _QR_BASE_URL = "https://www.arca.gob.ar/fe/qr/"
