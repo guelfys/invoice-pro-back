@@ -78,15 +78,24 @@ def api_put_config_excel(tipo: str, cuit: int, req: ConfigUpdateRequest):
 class JobCreateRequest(BaseModel):
     mode: str = "local"
     cuit: int
-    environment: str = "demo"  # demo | prod
+    environment: str = "prod"  # demo | produccion
+
+
+def _normalize_job_environment(value: str | None) -> str:
+    env = (value or "produccion").lower().strip()
+    if env in ("demo", "homo", "homologacion", "homologación", "test", "testing"):
+        return "demo"
+    if env in ("prod", "produccion", "producción", "production"):
+        return "produccion"
+    return "produccion"
 
 @app.get("/health")
 def health():
     return {"ok": True, "service": "invoicerpro-api"}
 
-@app.post("/jobs/generar")
+@app.post("/api/jobs/generar")
 def jobs_generar(req: JobCreateRequest):
-    env = (req.environment or "demo").lower().strip()
+    env = _normalize_job_environment(req.environment)
     script = settings.generator_script_demo if env == "demo" else settings.generator_script_prod
 
     job = create_job(
@@ -95,10 +104,11 @@ def jobs_generar(req: JobCreateRequest):
         jobs_dir=settings.jobs_dir,
         python_exe=settings.python_exe,
         script_args=["--cuit", str(req.cuit)],
+        job_metadata={"environment": env},
     )
-    return {"id": job.id, "status": job.status}
+    return {"id": job.id, "status": job.status, "environment": env}
 
-@app.get("/jobs/{job_id}")
+@app.get("/api/jobs/{job_id}")
 def jobs_get(job_id: str):
     try:
         job = get_job(job_id)
@@ -106,7 +116,7 @@ def jobs_get(job_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail="Job not found")
 
-@app.get("/jobs/{job_id}/log")
+@app.get("/api/jobs/{job_id}/log")
 def jobs_log(job_id: str):
     try:
         return {"id": job_id, "log": tail_log(job_id)}

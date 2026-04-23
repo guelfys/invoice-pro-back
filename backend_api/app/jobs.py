@@ -46,6 +46,7 @@ def create_job(
     python_exe: str,
     script_args: Optional[List[str]] = None,
     env_overrides: Optional[Dict[str, str]] = None,
+    job_metadata: Optional[Dict[str, str]] = None,
 ) -> Job:
     os.makedirs(jobs_dir, exist_ok=True)
 
@@ -77,6 +78,9 @@ def create_job(
         try:
             with open(log_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(f"[JOB {job_id}] Ejecutando:\n")
+                if job_metadata:
+                    for key, value in job_metadata.items():
+                        f.write(f"  {key.upper()}: {value}\n")
                 f.write(f"  EXE/PY: {python_exe}\n")
                 f.write(f"  SCRIPT: {full_script}\n")
                 f.write(f"  CWD:    {cwd}\n")

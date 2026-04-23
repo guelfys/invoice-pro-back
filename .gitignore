@@ -24,6 +24,8 @@ backend_api/.venv
 backend_api/app/__pycache__
 backend_api/jobs
 backend_api/readme.md
+backend_api/lib*
+backend_api/venv*
 .venv_invoicer
 configuraciones/UltimoTokenWSFEV1.txt
 Usuarios
@@ -43,3 +45,4 @@ build_portable.log
 run_app_boot.log
 input/archivoPruebas
 rth_pywin32.py
+jobs

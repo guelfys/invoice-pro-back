@@ -7,6 +7,7 @@ import shutil
 import xml.etree.ElementTree as ET
 from backend.log import escribir_log, obtener_timestamp, datetime
 from variables import BASE_DIR
+import copy
 
 #? Función para leer y verificar el token
 def verificar_token(Ultimo_Token_Path):
@@ -31,6 +32,9 @@ def verificar_token(Ultimo_Token_Path):
 def ejecutar_powershell(Login_Ticket_Path, Ultimo_Token_Path):
     script_path = os.path.join(Login_Ticket_Path, 'wsaa-cliente.ps1')
 
+    env = copy.copy(os.environ)
+    env["PATH"] = r"C:\Program Files\OpenSSL-Win64-ARM\bin" + ";" + env.get("PATH", "")
+
     escribir_log(f"{obtener_timestamp()} - Ejecutando PS1: {script_path}")
     escribir_log(f"{obtener_timestamp()} - CWD: {Login_Ticket_Path}")
 
@@ -43,7 +47,9 @@ def ejecutar_powershell(Login_Ticket_Path, Ultimo_Token_Path):
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path],
         cwd=Login_Ticket_Path,
         capture_output=True,
-        text=True
+        text=True,
+        encoding="cp1252",
+        env=env  
     )
 
     escribir_log(f"{obtener_timestamp()} - PS1 returncode: {result.returncode}")
