@@ -307,8 +307,8 @@ def sync_row2_all_tipos(
     razon_social: str = "",
     domicilio_comercial: str = "",
     condicion_iva: str = "",
-    ingresos_brutos: Optional[str] = None,
-    fecha_inicio_actividades: Optional[str] = None,
+    #ingresos_brutos: Optional[str] = None,
+    #fecha_inicio_actividades: Optional[str] = None,
     punto_venta: int,
     numero_actividad: int,
 ) -> Dict[str, Any]:
@@ -333,10 +333,10 @@ def sync_row2_all_tipos(
             ws.cell(row=r, column=hmap["Razón Social"]).value = razon_social or ""
             ws.cell(row=r, column=hmap["Domicilio Comercial"]).value = domicilio_comercial or ""
             ws.cell(row=r, column=hmap["Condición IVA"]).value = condicion_iva or ""
-            if ingresos_brutos is not None:
-                ws.cell(row=r, column=hmap["Ingresos Brutos"]).value = _norm_text(ingresos_brutos)
-            if fecha_inicio_actividades is not None:
-                ws.cell(row=r, column=hmap["Fecha de Inicio de Actividades"]).value = _norm_text(fecha_inicio_actividades)
+            # if ingresos_brutos is not None:
+            #     ws.cell(row=r, column=hmap["Ingresos Brutos"]).value = _norm_text(ingresos_brutos)
+            # if fecha_inicio_actividades is not None:
+            #     ws.cell(row=r, column=hmap["Fecha de Inicio de Actividades"]).value = _norm_text(fecha_inicio_actividades)
 
             changed[tipo] = {"sheet": sheet, "row": r}
 

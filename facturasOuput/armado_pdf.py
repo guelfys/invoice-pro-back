@@ -14,10 +14,12 @@ import tempfile
 from io import BytesIO
 from facturasOuput.qr_rescue import asegurar_qr_en_factura
 import pythoncom
+import logging
 
 try:
     import qrcode  
-except Exception:
+except Exception as e:
+    logging.warning(f"qrcode no disponible: {e}")
     qrcode = None
 
 _QR_BASE_URL = "https://www.arca.gob.ar/fe/qr/"

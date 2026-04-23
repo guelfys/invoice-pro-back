@@ -94,7 +94,6 @@ def health():
     return {"ok": True, "service": "invoicerpro-api"}
 
 @app.post("/api/jobs/generar")
-@app.post("/jobs/generar")
 def jobs_generar(req: JobCreateRequest):
     env = _normalize_job_environment(req.environment)
     script = settings.generator_script_demo if env == "demo" else settings.generator_script_prod
@@ -110,7 +109,6 @@ def jobs_generar(req: JobCreateRequest):
     return {"id": job.id, "status": job.status, "environment": env}
 
 @app.get("/api/jobs/{job_id}")
-@app.get("/jobs/{job_id}")
 def jobs_get(job_id: str):
     try:
         job = get_job(job_id)
@@ -119,7 +117,6 @@ def jobs_get(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
 @app.get("/api/jobs/{job_id}/log")
-@app.get("/jobs/{job_id}/log")
 def jobs_log(job_id: str):
     try:
         return {"id": job_id, "log": tail_log(job_id)}
