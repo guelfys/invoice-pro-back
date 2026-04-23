@@ -194,12 +194,7 @@ def _row_to_api(ws, row_idx: int, hmap: Dict[str, int]) -> Dict[str, Any]:
         return ws.cell(row=row_idx, column=ci).value if ci else None
 
     ingresos_brutos = get("Ingresos Brutos")
-    if ingresos_brutos in (None, ""):
-        ingresos_brutos = ws["I2"].value
-
     fecha_inicio_actividades = get("Fecha de Inicio de Actividades")
-    if fecha_inicio_actividades in (None, ""):
-        fecha_inicio_actividades = ws["J2"].value
 
     return {
         "cuit": _norm_int(get("Cuit")),
@@ -307,8 +302,8 @@ def sync_row2_all_tipos(
     razon_social: str = "",
     domicilio_comercial: str = "",
     condicion_iva: str = "",
-    #ingresos_brutos: Optional[str] = None,
-    #fecha_inicio_actividades: Optional[str] = None,
+    ingresos_brutos: Optional[str] = None,
+    fecha_inicio_actividades: Optional[str] = None,
     punto_venta: int,
     numero_actividad: int,
 ) -> Dict[str, Any]:
@@ -325,7 +320,11 @@ def sync_row2_all_tipos(
             hmap = _header_map(ws)
             _ensure_headers(ws, hmap)
 
-            r = 2  # <- tu requisito
+            col_cuit = hmap["Cuit"] # Busca en el excel la fila de ese cuit
+            r = _find_row_by_cuit(ws, col_cuit, cuit)
+            if r is None:
+                r = ws.max_row + 1
+
             ws.cell(row=r, column=hmap["Cuit"]).value = int(cuit)
             ws.cell(row=r, column=hmap["Punto Venta"]).value = int(punto_venta)
             ws.cell(row=r, column=hmap["Numero Actividad"]).value = int(numero_actividad)
@@ -333,10 +332,10 @@ def sync_row2_all_tipos(
             ws.cell(row=r, column=hmap["Razón Social"]).value = razon_social or ""
             ws.cell(row=r, column=hmap["Domicilio Comercial"]).value = domicilio_comercial or ""
             ws.cell(row=r, column=hmap["Condición IVA"]).value = condicion_iva or ""
-            # if ingresos_brutos is not None:
-            #     ws.cell(row=r, column=hmap["Ingresos Brutos"]).value = _norm_text(ingresos_brutos)
-            # if fecha_inicio_actividades is not None:
-            #     ws.cell(row=r, column=hmap["Fecha de Inicio de Actividades"]).value = _norm_text(fecha_inicio_actividades)
+            if ingresos_brutos is not None:
+                ws.cell(row=r, column=hmap["Ingresos Brutos"]).value = _norm_text(ingresos_brutos)
+            if fecha_inicio_actividades is not None:
+                ws.cell(row=r, column=hmap["Fecha de Inicio de Actividades"]).value = _norm_text(fecha_inicio_actividades)
 
             changed[tipo] = {"sheet": sheet, "row": r}
 

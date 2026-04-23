@@ -7,7 +7,7 @@ import os
 import sys
 from datetime import datetime
 from pydantic import BaseModel
-from .excel_config import sync_row2_all_tipos
+from .excel_config import sync_row2_all_tipos, get_config_by_cuit
 from zeep.helpers import serialize_object
 
 router = APIRouter(prefix="/api/config", tags=["config"])
@@ -793,7 +793,19 @@ def get_cuit_detail(cuit: str):
     for it in db.get("cuits", []):
         if str(it.get("cuit")) == cuit:
             _ensure_puntos_venta_fields(it)
-            return dict(it)
+            result = dict(it)
+            if CONFIG_XLSX.exists():
+                for tipo in ("A", "B", "C"):
+                    try:
+                        excel_data = get_config_by_cuit(str(CONFIG_XLSX), tipo, int(cuit))
+                        result["ingresos_brutos"] = excel_data.get("ingresos_brutos", "")
+                        result["fecha_inicio_actividades"] = excel_data.get("fecha_inicio_actividades", "")
+                        break
+                    except KeyError:
+                        continue
+                    except Exception:
+                        break
+            return result
 
     raise HTTPException(status_code=404, detail="CUIT no encontrado")
 
@@ -856,6 +868,8 @@ async def add_cuit(
 class SyncExcelRequest(BaseModel):
     punto_venta: int
     numero_actividad: int = 0
+    ingresos_brutos: Optional[str] = None
+    inicio_actividades: Optional[str] = None
 @router.post("/cuits/{cuit}/sync-excel")
 def sync_excel_from_cuit_cache(cuit: str, req: SyncExcelRequest):
 
@@ -888,8 +902,8 @@ def sync_excel_from_cuit_cache(cuit: str, req: SyncExcelRequest):
             razon_social=str(cuit_item.get("razon_social") or ""),
             domicilio_comercial=str(cuit_item.get("domicilio_comercial") or ""),
             condicion_iva=str(cuit_item.get("condicion_iva") or ""),
-            #ingresos_brutos=str(cuit_item.get("ingresos_brutos") or ""),
-            #fecha_inicio_actividades=str(cuit_item.get("fecha_inicio_actividades") or ""),
+            ingresos_brutos=req.ingresos_brutos,
+            fecha_inicio_actividades=req.inicio_actividades,
             punto_venta=pv,
             numero_actividad=na,
         )
