@@ -13,7 +13,7 @@
 # * IMPORTS MODULOS
 #! < BACKEND >
 from backend.log import escribir_log, obtener_timestamp, cerrar_log, abrir_log
-from backend.config import leer_datos_excel
+from backend.config import leer_datos_excel, normalizar_config_para_pdf, normalizar_columnas_config_df, normalizar_config_dict, completar_campos_fijos_desde_hoja_config
 #! < TOKEN >
 from autorizar.obtener_datos import verificar_token, ejecutar_powershell, leer_ticket_response, limpiar_output_dir
 #! < SERVICIO: FEV1 - Facturas A B o C sin detalle de items >
@@ -79,16 +79,33 @@ templates = {
 
 def leer_configuraciones_desde_excel(ruta_excel):
     try:
-        hoja_a = pd.read_excel(ruta_excel, sheet_name='FacturaA').fillna("")
-        hoja_b = pd.read_excel(ruta_excel, sheet_name='FacturaB').fillna("")
-        hoja_c = pd.read_excel(ruta_excel, sheet_name='FacturaC').fillna("")
+        hoja_a = normalizar_columnas_config_df(pd.read_excel(ruta_excel, sheet_name='FacturaA').fillna(""))
+        hoja_b = normalizar_columnas_config_df(pd.read_excel(ruta_excel, sheet_name='FacturaB').fillna(""))
+        hoja_c = normalizar_columnas_config_df(pd.read_excel(ruta_excel, sheet_name='FacturaC').fillna(""))
 
-        # Devolvemos LISTA de configs (una por fila)
-        return {
+        hoja_a = completar_campos_fijos_desde_hoja_config(hoja_a, ruta_excel, 'FacturaA')
+        hoja_b = completar_campos_fijos_desde_hoja_config(hoja_b, ruta_excel, 'FacturaB')
+        hoja_c = completar_campos_fijos_desde_hoja_config(hoja_c, ruta_excel, 'FacturaC')
+
+        result = {
             "Factura A": hoja_a.to_dict(orient="records"),
             "Factura B": hoja_b.to_dict(orient="records"),
             "Factura C": hoja_c.to_dict(orient="records"),
         }
+        
+        # DEBUG: mostrar primer registro de cada hoja
+        for tipo_fac, lista_records in result.items():
+            if lista_records:
+                first = lista_records[0]
+                msg = (
+                    f"{obtener_timestamp()} - [LEER_CONFIG] {tipo_fac} Primera fila: "
+                    f"Ingresos Brutos={repr(first.get('Ingresos Brutos'))} | "
+                    f"Fecha Inicio={repr(first.get('Fecha de Inicio de Actividades'))}"
+                )
+                print(msg)
+                escribir_log(msg)
+        
+        return result
     except Exception as e:
         escribir_log(f"{obtener_timestamp()} - Error al leer el archivo de configuración desde Excel: {e}")
         cerrar_log()
@@ -120,8 +137,9 @@ def obtener_configuracion_por_cuit(configuraciones, tipo_factura, cuit_seleccion
     candidatos = []
 
     for fila in filas:
-        if _to_int(fila.get("Cuit")) == cuit_sel:
-            candidatos.append(fila)
+        fila_normalizada = normalizar_config_dict(fila)
+        if _to_int(fila_normalizada.get("Cuit")) == cuit_sel:
+            candidatos.append(fila_normalizada)
 
     if not candidatos:
         return None
@@ -133,7 +151,22 @@ def obtener_configuracion_por_cuit(configuraciones, tipo_factura, cuit_seleccion
             if _to_int(fila.get("Punto Venta")) == pv_sel:
                 return fila
 
-    return candidatos[0]
+    return max(
+        candidatos,
+        key=lambda fila: sum(
+            1
+            for key in (
+                "Punto Venta",
+                "Numero Actividad",
+                "Razón Social",
+                "Domicilio Comercial",
+                "Condición IVA",
+                "Ingresos Brutos",
+                "Fecha de Inicio de Actividades",
+            )
+            if str(normalizar_config_para_pdf(fila).get(key, "")).strip()
+        ),
+    )
 
 def get_usuario_auth_source_dir(base_dir: str, cuit: int | str, servicio: str) -> str:
     cuit_str = str(int(float(cuit)))
@@ -295,6 +328,17 @@ def main():
             if not config:
                 escribir_log(f"{obtener_timestamp()} - No se encontró configuración para tipo {tipo_factura} y CUIT {cuit_seleccionado}.")
                 continue
+
+            config = normalizar_config_para_pdf(config)
+
+            debug_config_msg = (
+                f"{obtener_timestamp()} - [NORMALIZAR_CONFIG] [{tipo_factura}] "
+                f"Ingresos Brutos={repr(config.get('Ingresos Brutos'))} | "
+                f"Fecha Inicio Actividades={repr(config.get('Fecha de Inicio de Actividades'))} | "
+                f"(Keys en config: {list(config.keys())})"
+            )
+            print(debug_config_msg)
+            escribir_log(debug_config_msg)
 
             numero_actividad = config["Numero Actividad"]
 
@@ -645,6 +689,13 @@ def main():
                     # FACTURAS NORMALES - A, B o C
                     if realizando_facturas:
                         tipo_nota = "Factura"
+                        msg_before = (
+                            f"{obtener_timestamp()} - [ANTES COMPLETAR_PLANTILLA] Factura: "
+                            f"Ingresos Brutos={repr(config.get('Ingresos Brutos'))} | "
+                            f"Fecha Inicio={repr(config.get('Fecha de Inicio de Actividades'))}"
+                        )
+                        print(msg_before)
+                        escribir_log(msg_before)
                         completar_plantilla(ruta_completa_archivo, plantilla_output_path, datos_excel, cuerpos_solicitud, config, ListaValidacionCAE, tipo_factura, tipo_nota)
 
                     # NOTAS DE CREDITO - A, B o C
